@@ -11,6 +11,7 @@ You are handling the `/bridge` command for the agent-bridge tool. This tool lets
 
 1. **Always read the broker port fresh** from `~/.agent-bridge/broker.port` before EVERY command. NEVER reuse a port number from earlier in the conversation — the broker may have restarted on a different port.
 2. **For PID**, always determine the Claude Code process PID by running: `ps -o ppid= -p $$ | tr -d ' '` — this gets the parent process (Claude Code), not the temporary bash shell.
+3. **For Claude Session UUID**, ALWAYS confirm with the user using AskUserQuestion before registering. Never guess or assume.
 
 ## Arguments: $ARGUMENTS
 
@@ -47,20 +48,61 @@ Then use `curl` to call the broker's HTTP API at `http://127.0.0.1:$BRIDGE_PORT`
 
 ### connect [group] [--name name]
 
-Register this session with the broker. Run this single command to gather all required info and register:
+Register this session with the broker. This is a 3-step process:
+
+**Step 1: Auto-detect the Claude Code session UUID.**
+
+Run this to try to find the current session's UUID:
+
+```bash
+CLAUDE_PID=$(ps -o ppid= -p $$ | tr -d ' ')
+
+# Method 1: Check if --resume UUID is in process command line args
+DETECTED_UUID=$(ps -o args= -p $CLAUDE_PID 2>/dev/null | grep -oE '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' | head -1)
+
+# Method 2: Check which .jsonl file the Claude Code process has open
+if [ -z "$DETECTED_UUID" ]; then
+  DETECTED_UUID=$(lsof -p $CLAUDE_PID 2>/dev/null | grep '\.jsonl' | head -1 | awk '{print $NF}' | xargs basename 2>/dev/null | sed 's/.jsonl//')
+fi
+
+echo "Detected UUID: $DETECTED_UUID"
+
+# Also list all sessions in this directory for reference
+CWD_ENCODED=$(pwd | sed 's|/|-|g')
+echo "All sessions in this directory:"
+ls -lt ~/.claude/projects/${CWD_ENCODED}/*.jsonl 2>/dev/null | while read line; do
+  file=$(echo "$line" | awk '{print $NF}')
+  uuid=$(basename "$file" .jsonl)
+  mod=$(echo "$line" | awk '{print $6, $7, $8}')
+  echo "  $uuid (modified: $mod)"
+done
+```
+
+**Step 2: ALWAYS confirm with the user using AskUserQuestion.**
+
+You MUST use the AskUserQuestion tool to confirm the session UUID with the user. Do NOT skip this step.
+
+- If a UUID was auto-detected: show it as the first option and ask the user to confirm
+- If multiple sessions exist in the directory: show all of them as options with their modification times so the user can pick
+- Always include an "Other" option in case the user wants to enter a UUID manually
+
+Example: "Which Claude Code session is this?" with options showing the detected UUID(s).
+
+Do NOT proceed until the user confirms.
+
+**Step 3: Register with the confirmed UUID.**
 
 ```bash
 BRIDGE_PORT=$(cat ~/.agent-bridge/broker.port)
 CLAUDE_PID=$(ps -o ppid= -p $$ | tr -d ' ')
-SESSION_ID=$(uuidgen)
-CWD_ENCODED=$(pwd | sed 's|/|-|g')
-CLAUDE_SESSION_ID=$(ls -t ~/.claude/projects/${CWD_ENCODED}/*.jsonl 2>/dev/null | head -1 | xargs basename 2>/dev/null | sed 's/.jsonl//')
+SESSION_ID=$(uuidgen | tr '[:upper:]' '[:lower:]')
 
 curl -s -X POST http://127.0.0.1:$BRIDGE_PORT/sessions/register \
   -H 'Content-Type: application/json' \
-  -d "{\"sessionId\":\"$SESSION_ID\",\"claudeSessionId\":\"$CLAUDE_SESSION_ID\",\"pid\":$CLAUDE_PID,\"workingDirectory\":\"$(pwd)\",\"group\":\"<group>\",\"name\":\"<name>\"}"
+  -d "{\"sessionId\":\"$SESSION_ID\",\"claudeSessionId\":\"<confirmed-uuid>\",\"pid\":$CLAUDE_PID,\"workingDirectory\":\"$(pwd)\",\"group\":\"<group>\",\"name\":\"<name>\"}"
 ```
 
+Replace `<confirmed-uuid>` with the UUID the user confirmed in Step 2.
 Replace `<group>` with the group name from the user's argument (default: "default").
 Replace `<name>` with the `--name` value if provided, or omit the name field to auto-derive from directory.
 

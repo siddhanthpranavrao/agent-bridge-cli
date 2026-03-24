@@ -244,6 +244,10 @@ export async function handleAskRoute(
       }
     }
 
+    console.error("[bridge] Ask route error:", err instanceof Error ? err.message : err);
+    if (err instanceof Error && err.stack) {
+      console.error("[bridge] Stack:", err.stack);
+    }
     sendJson(res, 500, { error: "Internal server error" });
   }
 }

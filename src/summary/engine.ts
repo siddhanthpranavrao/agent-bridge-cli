@@ -37,7 +37,13 @@ export class SummaryEngine {
     sessionId: string,
     claudeSessionId: string
   ): Promise<Summary> {
-    const entries = await this.generateFn(claudeSessionId);
+    let entries: SummaryEntry[];
+    try {
+      entries = await this.generateFn(claudeSessionId);
+    } catch (err) {
+      console.error("[bridge] Summary generation error:", err instanceof Error ? err.message : err);
+      entries = [];
+    }
 
     const truncatedEntries = entries
       .map((e) => ({
