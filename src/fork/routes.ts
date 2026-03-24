@@ -233,7 +233,7 @@ export async function handleAskRoute(
     if (err instanceof ZodError) {
       return sendJson(res, 400, {
         error: "Validation failed",
-        details: err.errors.map((e) => ({
+        details: err.issues.map((e) => ({
           path: e.path.join("."),
           message: e.message,
         })),

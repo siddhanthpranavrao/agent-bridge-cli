@@ -114,7 +114,7 @@ export async function handleSessionRoutes(
     if (err instanceof ZodError) {
       return sendJson(res, 400, {
         error: "Validation failed",
-        details: err.errors.map((e) => ({ path: e.path.join("."), message: e.message })),
+        details: err.issues.map((e) => ({ path: e.path.join("."), message: e.message })),
       });
     }
 
