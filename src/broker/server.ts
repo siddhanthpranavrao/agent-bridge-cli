@@ -3,21 +3,26 @@ import { BROKER_PID_FILE, BROKER_PORT_FILE } from "../constants.ts";
 import type { Storage } from "../storage/storage.ts";
 import { SessionManager } from "../sessions/manager.ts";
 import { handleSessionRoutes } from "../sessions/routes.ts";
+import { ForkManager } from "../fork/manager.ts";
+import { handleAskRoute } from "../fork/routes.ts";
+import type { ForkerFn } from "../fork/types.ts";
 import { DEFAULT_BROKER_CONFIG, type BrokerConfig, type BrokerStatus } from "./types.ts";
 
 export class BrokerServer {
   private readonly storage: Storage;
   private readonly config: BrokerConfig;
   private readonly sessionManager: SessionManager;
+  private readonly forkManager: ForkManager;
   private server: Server | null = null;
   private startedAt: number = 0;
   private assignedPort: number = 0;
   private stopping: boolean = false;
 
-  constructor(storage: Storage, config?: Partial<BrokerConfig>) {
+  constructor(storage: Storage, config?: Partial<BrokerConfig>, forker?: ForkerFn) {
     this.storage = storage;
     this.config = { ...DEFAULT_BROKER_CONFIG, ...config };
     this.sessionManager = new SessionManager(storage);
+    this.forkManager = new ForkManager(forker);
   }
 
   async start(): Promise<void> {
@@ -85,6 +90,10 @@ export class BrokerServer {
     return this.sessionManager;
   }
 
+  getForkManager(): ForkManager {
+    return this.forkManager;
+  }
+
   private handleRequest(req: IncomingMessage, res: ServerResponse): void {
     const url = new URL(req.url ?? "/", `http://${req.headers.host}`);
     const path = url.pathname;
@@ -100,6 +109,12 @@ export class BrokerServer {
     // Session routes
     if (path.startsWith("/sessions")) {
       handleSessionRoutes(req, res, url, this.sessionManager);
+      return;
+    }
+
+    // Ask route
+    if (path === "/ask") {
+      handleAskRoute(req, res, this.sessionManager, this.forkManager);
       return;
     }
 

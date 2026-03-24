@@ -13,6 +13,7 @@
     "test": "bun test"
   },
   "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.2.81",
     "zod": "^3.25.0"
   },
   "devDependencies": {

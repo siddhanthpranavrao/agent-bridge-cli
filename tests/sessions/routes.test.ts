@@ -43,13 +43,14 @@ describe("POST /sessions/register", () => {
   test("registers a session and returns 201", async () => {
     const res = await post("/sessions/register", {
       sessionId: "s1",
+      claudeSessionId: "claude-uuid-s1",
       pid: process.pid,
       workingDirectory: "/projects/frontend",
       group: "acme",
     });
 
     expect(res.status).toBe(201);
-    const body = await res.json();
+    const body = await res.json() as any;
     expect(body.session.sessionId).toBe("s1");
     expect(body.session.group).toBe("acme");
     expect(body.session.name).toBe("frontend");
@@ -58,12 +59,13 @@ describe("POST /sessions/register", () => {
   test("uses default group when not specified", async () => {
     const res = await post("/sessions/register", {
       sessionId: "s1",
+      claudeSessionId: "claude-uuid-s1",
       pid: process.pid,
       workingDirectory: "/projects/frontend",
     });
 
     expect(res.status).toBe(201);
-    const body = await res.json();
+    const body = await res.json() as any;
     expect(body.session.group).toBe("default");
   });
 
@@ -74,7 +76,7 @@ describe("POST /sessions/register", () => {
     });
 
     expect(res.status).toBe(400);
-    const body = await res.json();
+    const body = await res.json() as any;
     expect(body.error).toBe("Validation failed");
     expect(body.details).toBeDefined();
   });
@@ -87,7 +89,7 @@ describe("POST /sessions/register", () => {
     });
 
     expect(res.status).toBe(400);
-    const body = await res.json();
+    const body = await res.json() as any;
     expect(body.error).toBe("Invalid JSON body");
   });
 
@@ -104,18 +106,20 @@ describe("POST /sessions/register", () => {
   test("returns 409 for duplicate sessionId", async () => {
     await post("/sessions/register", {
       sessionId: "s1",
+      claudeSessionId: "claude-uuid-s1",
       pid: process.pid,
       workingDirectory: "/projects/frontend",
     });
 
     const res = await post("/sessions/register", {
       sessionId: "s1",
+      claudeSessionId: "claude-uuid-s1",
       pid: process.pid,
       workingDirectory: "/projects/backend",
     });
 
     expect(res.status).toBe(409);
-    const body = await res.json();
+    const body = await res.json() as any;
     expect(body.error).toContain("already registered");
   });
 
@@ -129,20 +133,21 @@ describe("POST /sessions/deregister", () => {
   test("deregisters existing session", async () => {
     await post("/sessions/register", {
       sessionId: "s1",
+      claudeSessionId: "claude-uuid-s1",
       pid: process.pid,
       workingDirectory: "/projects/frontend",
     });
 
     const res = await post("/sessions/deregister", { sessionId: "s1" });
     expect(res.status).toBe(200);
-    const body = await res.json();
+    const body = await res.json() as any;
     expect(body.success).toBe(true);
   });
 
   test("returns success false for non-existent session", async () => {
     const res = await post("/sessions/deregister", { sessionId: "nonexistent" });
     expect(res.status).toBe(200);
-    const body = await res.json();
+    const body = await res.json() as any;
     expect(body.success).toBe(false);
   });
 
@@ -167,12 +172,14 @@ describe("GET /sessions?group=<name>", () => {
   test("lists sessions in a group", async () => {
     await post("/sessions/register", {
       sessionId: "s1",
+      claudeSessionId: "claude-uuid-s1",
       pid: process.pid,
       workingDirectory: "/projects/frontend",
       group: "acme",
     });
     await post("/sessions/register", {
       sessionId: "s2",
+      claudeSessionId: "claude-uuid-s2",
       pid: process.pid,
       workingDirectory: "/projects/backend",
       group: "acme",
@@ -180,21 +187,21 @@ describe("GET /sessions?group=<name>", () => {
 
     const res = await get("/sessions?group=acme");
     expect(res.status).toBe(200);
-    const body = await res.json();
+    const body = await res.json() as any;
     expect(body.sessions.length).toBe(2);
   });
 
   test("returns empty array for non-existent group", async () => {
     const res = await get("/sessions?group=nonexistent");
     expect(res.status).toBe(200);
-    const body = await res.json();
+    const body = await res.json() as any;
     expect(body.sessions).toEqual([]);
   });
 
   test("returns 400 when group parameter is missing", async () => {
     const res = await get("/sessions");
     expect(res.status).toBe(400);
-    const body = await res.json();
+    const body = await res.json() as any;
     expect(body.error).toContain("group");
   });
 
@@ -206,24 +213,26 @@ describe("GET /sessions?group=<name>", () => {
   test("groups are isolated", async () => {
     await post("/sessions/register", {
       sessionId: "s1",
+      claudeSessionId: "claude-uuid-s1",
       pid: process.pid,
       workingDirectory: "/projects/frontend",
       group: "acme",
     });
     await post("/sessions/register", {
       sessionId: "s2",
+      claudeSessionId: "claude-uuid-s2",
       pid: process.pid,
       workingDirectory: "/projects/side",
       group: "personal",
     });
 
     const acmeRes = await get("/sessions?group=acme");
-    const acmeBody = await acmeRes.json();
+    const acmeBody = await acmeRes.json() as any;
     expect(acmeBody.sessions.length).toBe(1);
     expect(acmeBody.sessions[0].sessionId).toBe("s1");
 
     const personalRes = await get("/sessions?group=personal");
-    const personalBody = await personalRes.json();
+    const personalBody = await personalRes.json() as any;
     expect(personalBody.sessions.length).toBe(1);
     expect(personalBody.sessions[0].sessionId).toBe("s2");
   });
@@ -233,12 +242,14 @@ describe("GET /sessions/groups", () => {
   test("lists all groups", async () => {
     await post("/sessions/register", {
       sessionId: "s1",
+      claudeSessionId: "claude-uuid-s1",
       pid: process.pid,
       workingDirectory: "/projects/frontend",
       group: "acme",
     });
     await post("/sessions/register", {
       sessionId: "s2",
+      claudeSessionId: "claude-uuid-s2",
       pid: process.pid,
       workingDirectory: "/projects/side",
       group: "personal",
@@ -246,7 +257,7 @@ describe("GET /sessions/groups", () => {
 
     const res = await get("/sessions/groups");
     expect(res.status).toBe(200);
-    const body = await res.json();
+    const body = await res.json() as any;
     expect(body.groups).toContain("acme");
     expect(body.groups).toContain("personal");
   });
@@ -254,7 +265,7 @@ describe("GET /sessions/groups", () => {
   test("returns empty list when no sessions", async () => {
     const res = await get("/sessions/groups");
     expect(res.status).toBe(200);
-    const body = await res.json();
+    const body = await res.json() as any;
     expect(body.groups).toEqual([]);
   });
 });
@@ -263,6 +274,7 @@ describe("GET /sessions/resolve", () => {
   beforeEach(async () => {
     await post("/sessions/register", {
       sessionId: "s1",
+      claudeSessionId: "claude-uuid-s1",
       pid: process.pid,
       workingDirectory: "/projects/frontend",
       group: "acme",
@@ -270,6 +282,7 @@ describe("GET /sessions/resolve", () => {
     });
     await post("/sessions/register", {
       sessionId: "s2",
+      claudeSessionId: "claude-uuid-s2",
       pid: process.pid,
       workingDirectory: "/projects/backend",
       group: "acme",
@@ -280,21 +293,21 @@ describe("GET /sessions/resolve", () => {
   test("resolves exact name match", async () => {
     const res = await get("/sessions/resolve?q=backend&group=acme");
     expect(res.status).toBe(200);
-    const body = await res.json();
+    const body = await res.json() as any;
     expect(body.session.sessionId).toBe("s2");
   });
 
   test("resolves fuzzy name match", async () => {
     const res = await get("/sessions/resolve?q=bakend&group=acme");
     expect(res.status).toBe(200);
-    const body = await res.json();
+    const body = await res.json() as any;
     expect(body.session.sessionId).toBe("s2");
   });
 
   test("returns null for no match", async () => {
     const res = await get("/sessions/resolve?q=zzzzzzz&group=acme");
     expect(res.status).toBe(200);
-    const body = await res.json();
+    const body = await res.json() as any;
     expect(body.session).toBeNull();
   });
 
@@ -313,12 +326,13 @@ describe("Broker /health with sessions", () => {
   test("health endpoint includes session count", async () => {
     await post("/sessions/register", {
       sessionId: "s1",
+      claudeSessionId: "claude-uuid-s1",
       pid: process.pid,
       workingDirectory: "/projects/frontend",
     });
 
     const res = await get("/health");
-    const body = await res.json();
+    const body = await res.json() as any;
     expect(body.sessions).toBe(1);
   });
 });

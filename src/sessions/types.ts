@@ -2,6 +2,7 @@ import { z } from "zod";
 
 export const SessionSchema = z.object({
   sessionId: z.string().min(1),
+  claudeSessionId: z.string().min(1),
   pid: z.number().int().positive(),
   workingDirectory: z.string().min(1),
   group: z.string().min(1),
@@ -11,6 +12,7 @@ export const SessionSchema = z.object({
 
 export const RegisterRequestSchema = z.object({
   sessionId: z.string().min(1),
+  claudeSessionId: z.string().min(1),
   pid: z.number().int().positive(),
   workingDirectory: z.string().min(1),
   group: z.string().min(1).optional(),

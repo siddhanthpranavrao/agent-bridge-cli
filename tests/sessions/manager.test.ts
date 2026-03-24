@@ -24,6 +24,7 @@ describe("SessionManager - registration (happy path)", () => {
   test("registers a session with correct fields", async () => {
     const session = await manager.register({
       sessionId: "s1",
+      claudeSessionId: "claude-uuid-s1",
       pid: process.pid,
       workingDirectory: "/projects/frontend",
       group: "acme",
@@ -40,6 +41,7 @@ describe("SessionManager - registration (happy path)", () => {
   test("uses default group when none specified", async () => {
     const session = await manager.register({
       sessionId: "s1",
+      claudeSessionId: "claude-uuid-s1",
       pid: process.pid,
       workingDirectory: "/projects/backend",
     });
@@ -50,6 +52,7 @@ describe("SessionManager - registration (happy path)", () => {
   test("uses custom name when provided", async () => {
     const session = await manager.register({
       sessionId: "s1",
+      claudeSessionId: "claude-uuid-s1",
       pid: process.pid,
       workingDirectory: "/projects/backend",
       name: "my-backend",
@@ -61,6 +64,7 @@ describe("SessionManager - registration (happy path)", () => {
   test("auto-derives name from working directory basename", async () => {
     const session = await manager.register({
       sessionId: "s1",
+      claudeSessionId: "claude-uuid-s1",
       pid: process.pid,
       workingDirectory: "/home/user/projects/hermes-svc",
     });
@@ -71,12 +75,14 @@ describe("SessionManager - registration (happy path)", () => {
   test("registers multiple sessions in same group", async () => {
     await manager.register({
       sessionId: "s1",
+      claudeSessionId: "claude-uuid-s1",
       pid: process.pid,
       workingDirectory: "/projects/frontend",
       group: "acme",
     });
     await manager.register({
       sessionId: "s2",
+      claudeSessionId: "claude-uuid-s2",
       pid: process.pid,
       workingDirectory: "/projects/backend",
       group: "acme",
@@ -89,12 +95,14 @@ describe("SessionManager - registration (happy path)", () => {
   test("registers sessions in different groups", async () => {
     await manager.register({
       sessionId: "s1",
+      claudeSessionId: "claude-uuid-s1",
       pid: process.pid,
       workingDirectory: "/projects/frontend",
       group: "acme",
     });
     await manager.register({
       sessionId: "s2",
+      claudeSessionId: "claude-uuid-s2",
       pid: process.pid,
       workingDirectory: "/projects/sideproject",
       group: "personal",
@@ -109,6 +117,7 @@ describe("SessionManager - registration (negative)", () => {
   test("rejects duplicate sessionId", async () => {
     await manager.register({
       sessionId: "s1",
+      claudeSessionId: "claude-uuid-s1",
       pid: process.pid,
       workingDirectory: "/projects/frontend",
     });
@@ -116,6 +125,7 @@ describe("SessionManager - registration (negative)", () => {
     expect(
       manager.register({
         sessionId: "s1",
+        claudeSessionId: "claude-uuid-s1-dup",
         pid: process.pid,
         workingDirectory: "/projects/backend",
       })
@@ -126,9 +136,10 @@ describe("SessionManager - registration (negative)", () => {
     expect(
       manager.register({
         sessionId: "s1",
+        claudeSessionId: "claude-uuid-s1",
         pid: 0,
         workingDirectory: "/projects/frontend",
-      })
+      } as any)
     ).rejects.toThrow();
   });
 
@@ -136,9 +147,10 @@ describe("SessionManager - registration (negative)", () => {
     expect(
       manager.register({
         sessionId: "s1",
+        claudeSessionId: "claude-uuid-s1",
         pid: -1,
         workingDirectory: "/projects/frontend",
-      })
+      } as any)
     ).rejects.toThrow();
   });
 
@@ -146,9 +158,10 @@ describe("SessionManager - registration (negative)", () => {
     expect(
       manager.register({
         sessionId: "",
+        claudeSessionId: "claude-uuid-s1",
         pid: process.pid,
         workingDirectory: "/projects/frontend",
-      })
+      } as any)
     ).rejects.toThrow();
   });
 
@@ -156,9 +169,10 @@ describe("SessionManager - registration (negative)", () => {
     expect(
       manager.register({
         sessionId: "s1",
+        claudeSessionId: "claude-uuid-s1",
         pid: process.pid,
         workingDirectory: "",
-      })
+      } as any)
     ).rejects.toThrow();
   });
 });
@@ -167,6 +181,7 @@ describe("SessionManager - deregistration", () => {
   test("deregisters existing session", async () => {
     await manager.register({
       sessionId: "s1",
+      claudeSessionId: "claude-uuid-s1",
       pid: process.pid,
       workingDirectory: "/projects/frontend",
     });
@@ -184,6 +199,7 @@ describe("SessionManager - deregistration", () => {
   test("cleans up group when last session is removed", async () => {
     await manager.register({
       sessionId: "s1",
+      claudeSessionId: "claude-uuid-s1",
       pid: process.pid,
       workingDirectory: "/projects/frontend",
       group: "acme",
@@ -196,12 +212,14 @@ describe("SessionManager - deregistration", () => {
   test("group persists when other sessions remain", async () => {
     await manager.register({
       sessionId: "s1",
+      claudeSessionId: "claude-uuid-s1",
       pid: process.pid,
       workingDirectory: "/projects/frontend",
       group: "acme",
     });
     await manager.register({
       sessionId: "s2",
+      claudeSessionId: "claude-uuid-s2",
       pid: process.pid,
       workingDirectory: "/projects/backend",
       group: "acme",
@@ -217,12 +235,14 @@ describe("SessionManager - listing", () => {
   test("lists sessions in a group", async () => {
     await manager.register({
       sessionId: "s1",
+      claudeSessionId: "claude-uuid-s1",
       pid: process.pid,
       workingDirectory: "/projects/frontend",
       group: "acme",
     });
     await manager.register({
       sessionId: "s2",
+      claudeSessionId: "claude-uuid-s2",
       pid: process.pid,
       workingDirectory: "/projects/backend",
       group: "acme",
@@ -242,12 +262,14 @@ describe("SessionManager - listing", () => {
   test("lists all groups", async () => {
     await manager.register({
       sessionId: "s1",
+      claudeSessionId: "claude-uuid-s1",
       pid: process.pid,
       workingDirectory: "/projects/frontend",
       group: "acme",
     });
     await manager.register({
       sessionId: "s2",
+      claudeSessionId: "claude-uuid-s2",
       pid: process.pid,
       workingDirectory: "/projects/side",
       group: "personal",
@@ -262,6 +284,7 @@ describe("SessionManager - listing", () => {
   test("groups with no sessions are not listed", async () => {
     await manager.register({
       sessionId: "s1",
+      claudeSessionId: "claude-uuid-s1",
       pid: process.pid,
       workingDirectory: "/projects/frontend",
       group: "acme",
@@ -274,12 +297,14 @@ describe("SessionManager - listing", () => {
   test("different groups are isolated", async () => {
     await manager.register({
       sessionId: "s1",
+      claudeSessionId: "claude-uuid-s1",
       pid: process.pid,
       workingDirectory: "/projects/frontend",
       group: "acme",
     });
     await manager.register({
       sessionId: "s2",
+      claudeSessionId: "claude-uuid-s2",
       pid: process.pid,
       workingDirectory: "/projects/side",
       group: "personal",
@@ -299,6 +324,7 @@ describe("SessionManager - resolve (fuzzy matching)", () => {
   beforeEach(async () => {
     await manager.register({
       sessionId: "s1",
+      claudeSessionId: "claude-uuid-s1",
       pid: process.pid,
       workingDirectory: "/projects/frontend",
       group: "acme",
@@ -306,6 +332,7 @@ describe("SessionManager - resolve (fuzzy matching)", () => {
     });
     await manager.register({
       sessionId: "s2",
+      claudeSessionId: "claude-uuid-s2",
       pid: process.pid,
       workingDirectory: "/projects/backend",
       group: "acme",
@@ -348,6 +375,7 @@ describe("SessionManager - PID validation", () => {
   test("current process PID is alive", async () => {
     await manager.register({
       sessionId: "s1",
+      claudeSessionId: "claude-uuid-s1",
       pid: process.pid,
       workingDirectory: "/projects/frontend",
     });
@@ -358,6 +386,7 @@ describe("SessionManager - PID validation", () => {
   test("non-existent PID is dead", async () => {
     await manager.register({
       sessionId: "s1",
+      claudeSessionId: "claude-uuid-s1-dead",
       pid: 99999999,
       workingDirectory: "/projects/frontend",
     });
@@ -372,11 +401,13 @@ describe("SessionManager - PID validation", () => {
   test("cleanupDead removes dead sessions", async () => {
     await manager.register({
       sessionId: "alive",
+      claudeSessionId: "claude-uuid-alive",
       pid: process.pid,
       workingDirectory: "/projects/frontend",
     });
     await manager.register({
       sessionId: "dead",
+      claudeSessionId: "claude-uuid-dead",
       pid: 99999999,
       workingDirectory: "/projects/backend",
     });
@@ -390,6 +421,7 @@ describe("SessionManager - PID validation", () => {
   test("cleanupDead returns 0 when all alive", async () => {
     await manager.register({
       sessionId: "s1",
+      claudeSessionId: "claude-uuid-s1",
       pid: process.pid,
       workingDirectory: "/projects/frontend",
     });
@@ -403,6 +435,7 @@ describe("SessionManager - persistence", () => {
   test("sessions.json exists after registration", async () => {
     await manager.register({
       sessionId: "s1",
+      claudeSessionId: "claude-uuid-s1",
       pid: process.pid,
       workingDirectory: "/projects/frontend",
       group: "acme",
@@ -414,12 +447,14 @@ describe("SessionManager - persistence", () => {
   test("sessions.json is updated after deregistration", async () => {
     await manager.register({
       sessionId: "s1",
+      claudeSessionId: "claude-uuid-s1",
       pid: process.pid,
       workingDirectory: "/projects/frontend",
       group: "acme",
     });
     await manager.register({
       sessionId: "s2",
+      claudeSessionId: "claude-uuid-s2",
       pid: process.pid,
       workingDirectory: "/projects/backend",
       group: "acme",
@@ -435,6 +470,7 @@ describe("SessionManager - persistence", () => {
   test("sessions.json is removed when group is empty", async () => {
     await manager.register({
       sessionId: "s1",
+      claudeSessionId: "claude-uuid-s1",
       pid: process.pid,
       workingDirectory: "/projects/frontend",
       group: "acme",
@@ -447,6 +483,7 @@ describe("SessionManager - persistence", () => {
   test("persisted data matches in-memory state", async () => {
     await manager.register({
       sessionId: "s1",
+      claudeSessionId: "claude-uuid-s1",
       pid: process.pid,
       workingDirectory: "/projects/frontend",
       group: "acme",
@@ -472,11 +509,13 @@ describe("SessionManager - getSessionCount", () => {
   test("returns correct count after registrations", async () => {
     await manager.register({
       sessionId: "s1",
+      claudeSessionId: "claude-uuid-s1",
       pid: process.pid,
       workingDirectory: "/projects/a",
     });
     await manager.register({
       sessionId: "s2",
+      claudeSessionId: "claude-uuid-s2",
       pid: process.pid,
       workingDirectory: "/projects/b",
     });
@@ -487,6 +526,7 @@ describe("SessionManager - getSessionCount", () => {
   test("decrements after deregistration", async () => {
     await manager.register({
       sessionId: "s1",
+      claudeSessionId: "claude-uuid-s1",
       pid: process.pid,
       workingDirectory: "/projects/a",
     });

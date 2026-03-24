@@ -73,7 +73,7 @@ describe("BrokerServer - health endpoint", () => {
     const res = await fetch(`http://127.0.0.1:${port}/health`);
     expect(res.status).toBe(200);
 
-    const body = await res.json();
+    const body = await res.json() as any;
     expect(body.pid).toBe(process.pid);
     expect(body.port).toBe(port);
     expect(body.status).toBe("ok");
@@ -89,7 +89,7 @@ describe("BrokerServer - unknown routes", () => {
     const res = await fetch(`http://127.0.0.1:${port}/unknown`);
     expect(res.status).toBe(404);
 
-    const body = await res.json();
+    const body = await res.json() as any;
     expect(body.error).toBe("Not found");
   });
 });
@@ -140,7 +140,7 @@ describe("BrokerServer - negative scenarios", () => {
 
     for (const res of responses) {
       expect(res.status).toBe(200);
-      const body = await res.json();
+      const body = await res.json() as any;
       expect(body.status).toBe("ok");
     }
   });

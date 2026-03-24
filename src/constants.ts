@@ -8,3 +8,4 @@ export const GROUPS_DIR = "groups";
 export const SUMMARIES_DIR = "summaries";
 export const DEFAULT_GROUP_NAME = "default";
 export const SESSIONS_FILE = "sessions.json";
+export const DEFAULT_FORK_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes

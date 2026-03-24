@@ -25,6 +25,7 @@ export class SessionManager {
 
     const session: Session = SessionSchema.parse({
       sessionId: parsed.sessionId,
+      claudeSessionId: parsed.claudeSessionId,
       pid: parsed.pid,
       workingDirectory: parsed.workingDirectory,
       group,
