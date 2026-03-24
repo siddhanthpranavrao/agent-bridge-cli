@@ -16,3 +16,4 @@ export const DEFAULT_IDLE_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
 export const DEFAULT_SHUTDOWN_GRACE_MS = 5 * 1000; // 5 seconds
 export const DEFAULT_FORK_TTL_MS = 15 * 60 * 1000; // 15 minutes
 export const DEFAULT_MAX_SUMMARY_AGE_MS = 24 * 60 * 60 * 1000; // 24 hours
+export const DEFAULT_MAX_FAN_OUT = 5;

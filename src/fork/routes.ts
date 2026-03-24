@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { INSUFFICIENT_CONTEXT } from "../constants.ts";
-import { AskRequestSchema, type AskResponse } from "./types.ts";
+import { INSUFFICIENT_CONTEXT, DEFAULT_MAX_FAN_OUT } from "../constants.ts";
+import { AskRequestSchema, type AskResponse, type AskMultiResponse } from "./types.ts";
 import type { ForkManager } from "./manager.ts";
 import type { SessionManager } from "../sessions/manager.ts";
 import type { SummaryEngine } from "../summary/engine.ts";
@@ -27,6 +27,46 @@ function parseJsonBody(body: string): unknown {
   } catch {
     return null;
   }
+}
+
+interface ResolvedTargets {
+  sessions: Session[];
+  warnings: string[];
+}
+
+function resolveTargets(
+  names: string[],
+  group: string,
+  sessionManager: SessionManager,
+  excludeSessionId?: string
+): ResolvedTargets {
+  const warnings: string[] = [];
+  const seen = new Map<string, Session>();
+
+  for (const name of names) {
+    const session = sessionManager.resolve(name, group);
+    if (!session) {
+      warnings.push(`Target "${name}" could not be resolved in group "${group}"`);
+      continue;
+    }
+
+    if (excludeSessionId && session.sessionId === excludeSessionId) {
+      continue;
+    }
+
+    if (seen.has(session.sessionId)) {
+      continue;
+    }
+
+    if (!sessionManager.validateAlive(session.sessionId)) {
+      warnings.push(`Target "${name}" (session "${session.name}") is no longer alive`);
+      continue;
+    }
+
+    seen.set(session.sessionId, session);
+  }
+
+  return { sessions: Array.from(seen.values()), warnings };
 }
 
 /**
@@ -167,6 +207,55 @@ async function autoRoute(
   };
 }
 
+async function askMultiple(
+  targets: string[],
+  group: string,
+  question: string,
+  sessionManager: SessionManager,
+  summaryEngine: SummaryEngine,
+  forkManager: ForkManager,
+  sourceSession?: string,
+  maxFanOut: number = DEFAULT_MAX_FAN_OUT
+): Promise<{ response: AskMultiResponse; status: number }> {
+  const { sessions, warnings } = resolveTargets(targets, group, sessionManager, sourceSession);
+
+  if (sessions.length > maxFanOut) {
+    return {
+      response: {
+        answers: [],
+        warnings: [
+          `Resolved ${sessions.length} sessions but max fan-out is ${maxFanOut}. Reduce targets or increase limit.`,
+        ],
+      },
+      status: 400,
+    };
+  }
+
+  if (sessions.length === 0) {
+    return {
+      response: { answers: [], warnings },
+      status: 404,
+    };
+  }
+
+  const answers: AskResponse[] = [];
+  for (const session of sessions) {
+    try {
+      const answer = await askSession(session, question, summaryEngine, forkManager);
+      answers.push(answer);
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      warnings.push(`Session "${session.name}" failed: ${errMsg}`);
+    }
+  }
+
+  if (answers.length === 0 && warnings.length > 0) {
+    return { response: { answers, warnings }, status: 404 };
+  }
+
+  return { response: { answers, warnings }, status: 200 };
+}
+
 export async function handleAskRoute(
   req: IncomingMessage,
   res: ServerResponse,
@@ -186,7 +275,43 @@ export async function handleAskRoute(
 
     const parsed = AskRequestSchema.parse(body);
 
-    // Path B: Auto-routing (no targetSession specified)
+    // Path D: Broadcast stub (issue #13 implements this)
+    if (parsed.broadcast === true) {
+      return sendJson(res, 501, {
+        error: "Broadcast is not yet implemented. Use targets array for multi-session queries.",
+      });
+    }
+
+    // Path C: Multi-target fan-out
+    if (parsed.targets) {
+      const { response, status } = await askMultiple(
+        parsed.targets,
+        parsed.group,
+        parsed.question,
+        sessionManager,
+        summaryEngine,
+        forkManager,
+        parsed.sourceSession
+      );
+
+      if (status === 400) {
+        return sendJson(res, 400, {
+          error: response.warnings[0] ?? "Fan-out limit exceeded",
+          warnings: response.warnings,
+        });
+      }
+
+      if (status === 404) {
+        return sendJson(res, 404, {
+          error: "No valid sessions could be queried",
+          warnings: response.warnings,
+        });
+      }
+
+      return sendJson(res, 200, response);
+    }
+
+    // Path B: Auto-routing (no targeting specified)
     if (!parsed.targetSession) {
       const { response, status } = await autoRoute(
         parsed.group,

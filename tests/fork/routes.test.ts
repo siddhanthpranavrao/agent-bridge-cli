@@ -421,3 +421,316 @@ describe("POST /ask - auto-routing (no targetSession)", () => {
     expect(body.source).toBe("backend");
   });
 });
+
+describe("POST /ask - multi-target (targets field)", () => {
+  test("asks multiple sessions and returns AskMultiResponse", async () => {
+    const res = await post("/ask", {
+      targets: ["frontend", "backend"],
+      question: "test question",
+      group: "acme",
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json() as any;
+    expect(body.answers).toBeInstanceOf(Array);
+    expect(body.answers.length).toBe(2);
+    expect(body.warnings).toBeInstanceOf(Array);
+    expect(body.warnings.length).toBe(0);
+
+    const sources = body.answers.map((a: any) => a.source).sort();
+    expect(sources).toEqual(["backend", "frontend"]);
+
+    for (const answer of body.answers) {
+      expect(answer.answer).toBeTruthy();
+      expect(answer.source).toBeTruthy();
+      expect(typeof answer.fromFork).toBe("boolean");
+    }
+  });
+
+  test("returns warnings for unresolved targets", async () => {
+    const res = await post("/ask", {
+      targets: ["frontend", "nonexistent"],
+      question: "test question",
+      group: "acme",
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json() as any;
+    expect(body.answers.length).toBe(1);
+    expect(body.answers[0].source).toBe("frontend");
+    expect(body.warnings.length).toBe(1);
+    expect(body.warnings[0]).toContain("nonexistent");
+  });
+
+  test("returns 404 when no targets resolve", async () => {
+    const res = await post("/ask", {
+      targets: ["nonexistent1", "nonexistent2"],
+      question: "test question",
+      group: "acme",
+    });
+
+    expect(res.status).toBe(404);
+    const body = await res.json() as any;
+    expect(body.warnings.length).toBe(2);
+  });
+
+  test("deduplicates targets resolved to same session", async () => {
+    const res = await post("/ask", {
+      targets: ["backend", "bakend"],
+      question: "test question",
+      group: "acme",
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json() as any;
+    expect(body.answers.length).toBe(1);
+    expect(body.answers[0].source).toBe("backend");
+    expect(body.warnings.length).toBe(0);
+  });
+
+  test("returns 400 when resolved targets exceed maxFanOut", async () => {
+    // Register 6 sessions (we already have 2, add 4 more)
+    for (let i = 3; i <= 8; i++) {
+      await post("/sessions/register", {
+        sessionId: `s${i}`,
+        claudeSessionId: `claude-uuid-${i}`,
+        pid: process.pid,
+        workingDirectory: `/projects/svc-${i}`,
+        group: "acme",
+        name: `service-${i}`,
+      });
+    }
+
+    const res = await post("/ask", {
+      targets: ["frontend", "backend", "service-3", "service-4", "service-5", "service-6"],
+      question: "test question",
+      group: "acme",
+    });
+
+    expect(res.status).toBe(400);
+    const body = await res.json() as any;
+    expect(body.error).toContain("max fan-out");
+  });
+
+  test("maxFanOut applies to deduplicated count, not input count", async () => {
+    // 6 names but they resolve to only 2 unique sessions (below limit of 5)
+    const res = await post("/ask", {
+      targets: ["backend", "bakend", "backnd", "frontend", "frontnd", "fronted"],
+      question: "test question",
+      group: "acme",
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json() as any;
+    expect(body.answers.length).toBe(2); // only 2 unique sessions
+  });
+
+  test("isolates errors — one session crash doesn't block others", async () => {
+    const errorForker = async (
+      sessionId: string,
+      _question: string,
+      _config: ForkConfig
+    ): Promise<ForkResult> => {
+      if (sessionId === "claude-uuid-frontend") {
+        throw new Error("Fork crashed for frontend");
+      }
+      return {
+        answer: "Backend answer here",
+        forkSessionId: "fork-ok",
+        durationMs: 100,
+      };
+    };
+
+    const errorBroker = new BrokerServer(storage, undefined, {
+      ...mockDeps,
+      forker: errorForker,
+    });
+    await errorBroker.start();
+    const errorUrl = `http://127.0.0.1:${errorBroker.getPort()}`;
+
+    await fetch(`${errorUrl}/sessions/register`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: "s1", claudeSessionId: "claude-uuid-frontend",
+        pid: process.pid, workingDirectory: "/projects/frontend", group: "acme", name: "frontend",
+      }),
+    });
+    await fetch(`${errorUrl}/sessions/register`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: "s2", claudeSessionId: "claude-uuid-backend",
+        pid: process.pid, workingDirectory: "/projects/backend", group: "acme", name: "backend",
+      }),
+    });
+
+    const res = await fetch(`${errorUrl}/ask`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        targets: ["frontend", "backend"],
+        question: "test",
+        group: "acme",
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json() as any;
+    expect(body.answers.length).toBe(1);
+    expect(body.answers[0].source).toBe("backend");
+    expect(body.warnings.length).toBeGreaterThanOrEqual(1);
+    expect(body.warnings.some((w: string) => w.includes("frontend"))).toBe(true);
+
+    await errorBroker.stop();
+  });
+
+  test("warns for dead sessions in multi-target", async () => {
+    await post("/sessions/register", {
+      sessionId: "dead-session",
+      claudeSessionId: "claude-uuid-dead",
+      pid: 99999999,
+      workingDirectory: "/projects/dead",
+      group: "acme",
+      name: "dead-service",
+    });
+
+    const res = await post("/ask", {
+      targets: ["frontend", "dead-service"],
+      question: "test question",
+      group: "acme",
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json() as any;
+    expect(body.answers.length).toBe(1);
+    expect(body.answers[0].source).toBe("frontend");
+    expect(body.warnings.length).toBe(1);
+    expect(body.warnings[0]).toContain("no longer alive");
+  });
+
+  test("uses fuzzy matching for individual targets", async () => {
+    const res = await post("/ask", {
+      targets: ["frontnd", "bakend"],
+      question: "test question",
+      group: "acme",
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json() as any;
+    expect(body.answers.length).toBe(2);
+  });
+
+  test("single element in targets returns AskMultiResponse format", async () => {
+    const res = await post("/ask", {
+      targets: ["backend"],
+      question: "test question",
+      group: "acme",
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json() as any;
+    // Must have answers array, not flat answer/source/fromFork
+    expect(body.answers).toBeInstanceOf(Array);
+    expect(body.answers.length).toBe(1);
+    expect(body.warnings).toBeInstanceOf(Array);
+  });
+
+  test("targets with wrong group returns 404", async () => {
+    const res = await post("/ask", {
+      targets: ["backend"],
+      question: "test question",
+      group: "wrong-group",
+    });
+
+    expect(res.status).toBe(404);
+  });
+
+  test("self-exclusion via sourceSession", async () => {
+    const res = await post("/ask", {
+      targets: ["frontend", "backend"],
+      question: "test question",
+      group: "acme",
+      sourceSession: "s1",
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json() as any;
+    expect(body.answers.length).toBe(1);
+    expect(body.answers[0].source).toBe("backend");
+  });
+
+  test("self-exclusion with all targets being self returns 404", async () => {
+    const res = await post("/ask", {
+      targets: ["frontend"],
+      question: "test question",
+      group: "acme",
+      sourceSession: "s1",
+    });
+
+    expect(res.status).toBe(404);
+  });
+});
+
+describe("POST /ask - mutual exclusivity", () => {
+  test("rejects targetSession + targets", async () => {
+    const res = await post("/ask", {
+      targetSession: "backend",
+      targets: ["frontend"],
+      question: "test question",
+      group: "acme",
+    });
+
+    expect(res.status).toBe(400);
+    const body = await res.json() as any;
+    expect(body.error).toBe("Validation failed");
+    expect(body.details.some((d: any) => d.message.includes("Only one targeting mode"))).toBe(true);
+  });
+
+  test("rejects targets + broadcast: true", async () => {
+    const res = await post("/ask", {
+      targets: ["frontend"],
+      broadcast: true,
+      question: "test question",
+      group: "acme",
+    });
+
+    expect(res.status).toBe(400);
+  });
+
+  test("broadcast: false does not conflict with targetSession", async () => {
+    const res = await post("/ask", {
+      targetSession: "backend",
+      broadcast: false,
+      question: "test question",
+      group: "acme",
+    });
+
+    expect(res.status).toBe(200);
+  });
+
+  test("broadcast: false does not conflict with targets", async () => {
+    const res = await post("/ask", {
+      targets: ["frontend", "backend"],
+      broadcast: false,
+      question: "test question",
+      group: "acme",
+    });
+
+    expect(res.status).toBe(200);
+  });
+});
+
+describe("POST /ask - broadcast stub", () => {
+  test("broadcast: true returns 501", async () => {
+    const res = await post("/ask", {
+      broadcast: true,
+      question: "test question",
+      group: "acme",
+    });
+
+    expect(res.status).toBe(501);
+    const body = await res.json() as any;
+    expect(body.error).toContain("not yet implemented");
+  });
+});
