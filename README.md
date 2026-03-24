@@ -4,6 +4,97 @@ Let multiple Claude Code instances communicate without polluting each other's co
 
 When you're working across multiple codebases — a frontend, a backend, a database layer — each Claude Code session builds deep context about its part of the system. **agent-bridge** lets those sessions talk to each other, so you can ask your frontend session about the backend's API without switching contexts or copy-pasting.
 
+## Quick start
+
+```bash
+# 1. Install
+npm install -g agent-bridge-cli
+
+# 2. Inside Claude Code, connect to a group
+/bridge connect myproject
+
+# 3. In another Claude Code session, connect to the same group
+/bridge connect myproject
+
+# 4. Ask the other session a question
+/bridge ask backend "What does the /users endpoint expect?"
+```
+
+> New to groups and session names? See [Groups, Sessions, and Names](#groups-sessions-and-names) below.
+
+The broker starts automatically when you first run `/bridge connect`. If it doesn't start automatically, you can start it manually with `agent-bridge &`.
+
+## Groups, Sessions, and Names
+
+Before using agent-bridge, you need to understand three concepts:
+
+### Groups
+
+A **group** ties related Claude Code sessions together. Only sessions in the same group can talk to each other. Think of it as your project name.
+
+You choose the group name when you connect: `/bridge connect my-project`
+
+Sessions in different groups are completely isolated — your work project sessions can't see your side project sessions.
+
+### Session names
+
+A **name** is how you refer to a session when asking it questions. It's auto-derived from your working directory:
+
+- Working in `/projects/acme-api` → name becomes `acme-api`
+- Working in `/projects/frontend-app` → name becomes `frontend-app`
+
+You can override it: `/bridge connect my-project --name backend`
+
+Then ask it by name: `/bridge ask backend "how does auth work?"`
+
+If two sessions have the same directory name in the same group, the second one gets auto-suffixed: `acme-api`, `acme-api-2`.
+
+### Example: Different repositories
+
+You have a frontend and backend in separate repos:
+
+```
+Terminal 1: claude (in /projects/acme-web)
+  → /bridge connect acme --name frontend
+
+Terminal 2: claude (in /projects/acme-api)
+  → /bridge connect acme --name backend
+
+Terminal 1:
+  → /bridge ask backend "What does the /users endpoint expect?"
+  ✓ "POST /users expects { email: string, password: string }..."
+```
+
+### Example: Same repository, different focus areas
+
+You have one monorepo but two sessions exploring different parts:
+
+```
+Terminal 1: claude --resume <session-1> (in /projects/acme-app)
+  → /bridge connect acme --name frontend
+  (this session has been exploring the React components)
+
+Terminal 2: claude --resume <session-2> (in /projects/acme-app)
+  → /bridge connect acme --name api
+  (this session has been exploring the Express routes)
+
+Terminal 1:
+  → /bridge ask api "How does the auth middleware validate tokens?"
+  ✓ "JWT tokens are validated via supabase.auth.getUser()..."
+```
+
+### Example: Multiple projects
+
+```
+# Project A sessions — can only talk to each other
+/bridge connect project-a --name frontend
+/bridge connect project-a --name backend
+
+# Project B sessions — completely isolated from Project A
+/bridge connect project-b --name app
+/bridge connect project-b --name database
+```
+
 ## How it works
 
 A lightweight local broker runs on your machine. Claude Code sessions register with it. When one session needs information from another, the broker either answers from a cached knowledge summary (cheap) or forks the target session to get the answer (more expensive, but only when needed). Summaries get smarter over time as forks fill in knowledge gaps.
@@ -19,25 +110,6 @@ Frontend Session                    Backend Session
      |            └─ Enrich summary        |
      |<───────────┘                        |
      |  "POST { email, password }"         |
-```
-
-## Quick start
-
-```bash
-# 1. Install
-npm install -g agent-bridge-cli
-
-# 2. Inside Claude Code, connect to a group
-/bridge connect myproject
-
-# 3. Ask another session a question
-/bridge ask backend "What does the /users endpoint expect?"
-```
-
-The broker starts automatically when you first run `/bridge connect`. If it doesn't start automatically, you can start it manually:
-
-```bash
-agent-bridge &
 ```
 
 ## Installation
