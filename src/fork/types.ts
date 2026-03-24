@@ -1,12 +1,20 @@
 import { z } from "zod";
-import { DEFAULT_FORK_TIMEOUT_MS, DEFAULT_FORK_TTL_MS } from "../constants.ts";
+import { DEFAULT_FORK_TIMEOUT_MS, DEFAULT_FORK_TTL_MS, DEFAULT_MAX_QUERIES } from "../constants.ts";
+
+export const QueryGroupSchema = z.object({
+  question: z.string().min(1),
+  targets: z.array(z.string().min(1)).min(1),
+});
+
+export type QueryGroup = z.infer<typeof QueryGroupSchema>;
 
 export const AskRequestSchema = z
   .object({
     targetSession: z.string().min(1).optional(),
     targets: z.array(z.string().min(1)).min(1).optional(),
     broadcast: z.boolean().optional(),
-    question: z.string().min(1),
+    queries: z.array(QueryGroupSchema).min(1).max(DEFAULT_MAX_QUERIES).optional(),
+    question: z.string().min(1).optional(),
     group: z.string().min(1),
     sourceSession: z.string().min(1).optional(),
   })
@@ -15,11 +23,19 @@ export const AskRequestSchema = z
     if (data.targetSession) modes.push("targetSession");
     if (data.targets) modes.push("targets");
     if (data.broadcast === true) modes.push("broadcast");
+    if (data.queries) modes.push("queries");
     if (modes.length > 1) {
       ctx.addIssue({
         code: "custom",
         message: `Only one targeting mode allowed. Found: ${modes.join(", ")}`,
         path: [modes[1]!],
+      });
+    }
+    if (!data.queries && !data.question) {
+      ctx.addIssue({
+        code: "custom",
+        message: "question is required when queries is not provided",
+        path: ["question"],
       });
     }
   });

@@ -1053,3 +1053,413 @@ describe("POST /ask - 207 Multi-Status", () => {
     expect(body.warnings.length).toBe(0);
   });
 });
+
+describe("POST /ask - queries mode", () => {
+  test("different questions to different sessions", async () => {
+    const res = await post("/ask", {
+      queries: [
+        { question: "Q1 for frontend", targets: ["frontend"] },
+        { question: "Q2 for backend", targets: ["backend"] },
+      ],
+      group: "acme",
+    });
+
+    const status = res.status;
+    expect(status === 200 || status === 207).toBe(true);
+    const body = await res.json() as any;
+    expect(body.answers.length).toBe(2);
+    const sources = body.answers.map((a: any) => a.source).sort();
+    expect(sources).toEqual(["backend", "frontend"]);
+  });
+
+  test("same question to multiple targets in one group", async () => {
+    const res = await post("/ask", {
+      queries: [
+        { question: "shared question", targets: ["frontend", "backend"] },
+      ],
+      group: "acme",
+    });
+
+    const status = res.status;
+    expect(status === 200 || status === 207).toBe(true);
+    const body = await res.json() as any;
+    expect(body.answers.length).toBe(2);
+  });
+
+  test("session in multiple groups forked once", async () => {
+    let forkCallCount = 0;
+    let lastReceivedQuestion = "";
+    const trackingDeps = {
+      ...mockDeps,
+      forker: async (_sid: string, question: string, _config: ForkConfig): Promise<ForkResult> => {
+        forkCallCount++;
+        lastReceivedQuestion = question;
+        return { answer: "forked answer", forkSessionId: "fork-1", durationMs: 100 };
+      },
+    };
+
+    const tBroker = new BrokerServer(storage, undefined, trackingDeps);
+    await tBroker.start();
+    const tUrl = `http://127.0.0.1:${tBroker.getPort()}`;
+
+    await fetch(`${tUrl}/sessions/register`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sessionId: "s1", claudeSessionId: "uuid-1", pid: process.pid, workingDirectory: "/p/a", group: "acme", name: "backend" }),
+    });
+
+    const res = await fetch(`${tUrl}/ask`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        queries: [
+          { question: "Q1", targets: ["backend"] },
+          { question: "Q2", targets: ["backend"] },
+        ],
+        group: "acme",
+      }),
+    });
+
+    const status = res.status;
+    expect(status === 200 || status === 207).toBe(true);
+    // Backend should be forked ONCE with both questions batched
+    expect(forkCallCount).toBe(1);
+    expect(lastReceivedQuestion).toContain("Q1");
+    expect(lastReceivedQuestion).toContain("Q2");
+
+    await tBroker.stop();
+  });
+
+  test("questions answered from summary skip fork", async () => {
+    let forkCallCount = 0;
+    const qDeps = {
+      forker: async (): Promise<ForkResult> => {
+        forkCallCount++;
+        return { answer: "forked", forkSessionId: "f1", durationMs: 100 };
+      },
+      summaryGenerate: async (claudeSessionId: string): Promise<SummaryEntry[]> => {
+        if (claudeSessionId === "uuid-1") {
+          return [{ topic: "users endpoint", content: "POST /users", addedAt: Date.now() }];
+        }
+        return [];
+      },
+      summaryQuery: async (entries: SummaryEntry[], _q: string): Promise<string> => {
+        if (entries.length > 0) return entries[0]!.content;
+        return INSUFFICIENT_CONTEXT;
+      },
+      summaryEnrich: mockSummaryEnrich,
+    };
+
+    const qBroker = new BrokerServer(storage, undefined, qDeps);
+    await qBroker.start();
+    const qUrl = `http://127.0.0.1:${qBroker.getPort()}`;
+
+    await fetch(`${qUrl}/sessions/register`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sessionId: "s1", claudeSessionId: "uuid-1", pid: process.pid, workingDirectory: "/p/a", group: "acme", name: "backend" }),
+    });
+
+    const res = await fetch(`${qUrl}/ask`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        queries: [
+          { question: "users endpoint", targets: ["backend"] },
+          { question: "kubernetes config", targets: ["backend"] },
+        ],
+        group: "acme",
+      }),
+    });
+
+    const body = await res.json() as any;
+    // "users endpoint" answered from summary, "kubernetes config" needs fork
+    const summaryAnswer = body.answers.find((a: any) => a.fromFork === false);
+    const forkAnswer = body.answers.find((a: any) => a.fromFork === true);
+    expect(summaryAnswer).toBeTruthy();
+    expect(forkAnswer).toBeTruthy();
+    expect(forkCallCount).toBe(1);
+
+    await qBroker.stop();
+  });
+
+  test("all answered from summary, zero forks", async () => {
+    let forkCallCount = 0;
+    const qDeps = {
+      forker: async (): Promise<ForkResult> => {
+        forkCallCount++;
+        return { answer: "forked", forkSessionId: "f1", durationMs: 100 };
+      },
+      summaryGenerate: async (): Promise<SummaryEntry[]> => [
+        { topic: "users endpoint", content: "POST /users", addedAt: Date.now() },
+      ],
+      summaryQuery: async (entries: SummaryEntry[], _q: string): Promise<string> => {
+        if (entries.length > 0) return entries[0]!.content;
+        return INSUFFICIENT_CONTEXT;
+      },
+      summaryEnrich: mockSummaryEnrich,
+    };
+
+    const qBroker = new BrokerServer(storage, undefined, qDeps);
+    await qBroker.start();
+    const qUrl = `http://127.0.0.1:${qBroker.getPort()}`;
+
+    await fetch(`${qUrl}/sessions/register`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sessionId: "s1", claudeSessionId: "uuid-1", pid: process.pid, workingDirectory: "/p/a", group: "acme", name: "svc-a" }),
+    });
+    await fetch(`${qUrl}/sessions/register`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sessionId: "s2", claudeSessionId: "uuid-2", pid: process.pid, workingDirectory: "/p/b", group: "acme", name: "svc-b" }),
+    });
+
+    const res = await fetch(`${qUrl}/ask`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        queries: [
+          { question: "users endpoint", targets: ["svc-a"] },
+          { question: "users endpoint", targets: ["svc-b"] },
+        ],
+        group: "acme",
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json() as any;
+    expect(body.answers.length).toBe(2);
+    expect(forkCallCount).toBe(0);
+
+    await qBroker.stop();
+  });
+
+  test("warnings for unresolved targets", async () => {
+    const res = await post("/ask", {
+      queries: [
+        { question: "Q1", targets: ["frontend", "nonexistent"] },
+      ],
+      group: "acme",
+    });
+
+    expect(res.status).toBe(207);
+    const body = await res.json() as any;
+    expect(body.answers.length).toBe(1);
+    expect(body.warnings.some((w: string) => w.includes("nonexistent"))).toBe(true);
+  });
+
+  test("all targets invalid across all groups returns 404", async () => {
+    const res = await post("/ask", {
+      queries: [
+        { question: "Q1", targets: ["nonexistent1"] },
+        { question: "Q2", targets: ["nonexistent2"] },
+      ],
+      group: "acme",
+    });
+
+    expect(res.status).toBe(404);
+  });
+
+  test("maxFanOut exceeded by unique sessions returns 400", async () => {
+    for (let i = 3; i <= 8; i++) {
+      await post("/sessions/register", {
+        sessionId: `s${i}`, claudeSessionId: `uuid-${i}`, pid: process.pid,
+        workingDirectory: `/p/svc-${i}`, group: "acme", name: `service-${i}`,
+      });
+    }
+
+    const res = await post("/ask", {
+      queries: [
+        { question: "Q1", targets: ["frontend", "backend", "service-3"] },
+        { question: "Q2", targets: ["service-4", "service-5", "service-6"] },
+      ],
+      group: "acme",
+    });
+
+    expect(res.status).toBe(400);
+    const body = await res.json() as any;
+    expect(body.error).toContain("max fan-out");
+  });
+
+  test("self-exclusion via sourceSession", async () => {
+    const res = await post("/ask", {
+      queries: [
+        { question: "Q1", targets: ["frontend", "backend"] },
+      ],
+      group: "acme",
+      sourceSession: "s1",
+    });
+
+    const status = res.status;
+    expect(status === 200 || status === 207).toBe(true);
+    const body = await res.json() as any;
+    expect(body.answers.length).toBe(1);
+    expect(body.answers[0].source).toBe("backend");
+  });
+
+  test("flat AskMultiResponse format", async () => {
+    const res = await post("/ask", {
+      queries: [{ question: "Q1", targets: ["backend"] }],
+      group: "acme",
+    });
+
+    const body = await res.json() as any;
+    expect(body.answers).toBeInstanceOf(Array);
+    expect(body.warnings).toBeInstanceOf(Array);
+  });
+
+  test("batched fork prompt contains all questions", async () => {
+    let receivedQuestion = "";
+    const tDeps = {
+      ...mockDeps,
+      forker: async (_sid: string, question: string, _config: ForkConfig): Promise<ForkResult> => {
+        receivedQuestion = question;
+        return { answer: "answer", forkSessionId: "f1", durationMs: 100 };
+      },
+    };
+
+    const tBroker = new BrokerServer(storage, undefined, tDeps);
+    await tBroker.start();
+    const tUrl = `http://127.0.0.1:${tBroker.getPort()}`;
+
+    await fetch(`${tUrl}/sessions/register`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sessionId: "s1", claudeSessionId: "uuid-1", pid: process.pid, workingDirectory: "/p/a", group: "acme", name: "backend" }),
+    });
+
+    await fetch(`${tUrl}/ask`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        queries: [
+          { question: "What is the API?", targets: ["backend"] },
+          { question: "How does auth work?", targets: ["backend"] },
+        ],
+        group: "acme",
+      }),
+    });
+
+    expect(receivedQuestion).toContain("What is the API?");
+    expect(receivedQuestion).toContain("How does auth work?");
+    expect(receivedQuestion).toContain("Answer these questions separately");
+
+    await tBroker.stop();
+  });
+
+  test("deduplicates same question for same session", async () => {
+    let forkCallCount = 0;
+    let receivedQuestion = "";
+    const tDeps = {
+      ...mockDeps,
+      forker: async (_sid: string, question: string, _config: ForkConfig): Promise<ForkResult> => {
+        forkCallCount++;
+        receivedQuestion = question;
+        return { answer: "answer", forkSessionId: "f1", durationMs: 100 };
+      },
+    };
+
+    const tBroker = new BrokerServer(storage, undefined, tDeps);
+    await tBroker.start();
+    const tUrl = `http://127.0.0.1:${tBroker.getPort()}`;
+
+    await fetch(`${tUrl}/sessions/register`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sessionId: "s1", claudeSessionId: "uuid-1", pid: process.pid, workingDirectory: "/p/a", group: "acme", name: "backend" }),
+    });
+
+    await fetch(`${tUrl}/ask`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        queries: [
+          { question: "same question", targets: ["backend"] },
+          { question: "same question", targets: ["backend"] },
+        ],
+        group: "acme",
+      }),
+    });
+
+    // Should be deduped — only one question for backend, sent directly (not batched)
+    expect(forkCallCount).toBe(1);
+    expect(receivedQuestion).toBe("same question");
+    expect(receivedQuestion).not.toContain("Answer these questions separately");
+
+    await tBroker.stop();
+  });
+});
+
+describe("POST /ask - queries schema validation", () => {
+  test("accepts valid queries request", async () => {
+    const res = await post("/ask", {
+      queries: [{ question: "Q1", targets: ["backend"] }],
+      group: "acme",
+    });
+
+    expect(res.status).not.toBe(400);
+  });
+
+  test("question field optional when queries set", async () => {
+    const res = await post("/ask", {
+      queries: [{ question: "Q1", targets: ["backend"] }],
+      group: "acme",
+      // NO question field
+    });
+
+    expect(res.status).not.toBe(400);
+  });
+
+  test("question field required when queries not set", async () => {
+    const res = await post("/ask", {
+      group: "acme",
+      // NO question, NO queries
+    });
+
+    expect(res.status).toBe(400);
+  });
+
+  test("rejects queries + targetSession", async () => {
+    const res = await post("/ask", {
+      queries: [{ question: "Q1", targets: ["backend"] }],
+      targetSession: "frontend",
+      group: "acme",
+    });
+
+    expect(res.status).toBe(400);
+    const body = await res.json() as any;
+    expect(body.details.some((d: any) => d.message.includes("Only one targeting mode"))).toBe(true);
+  });
+
+  test("rejects queries + targets", async () => {
+    const res = await post("/ask", {
+      queries: [{ question: "Q1", targets: ["backend"] }],
+      targets: ["frontend"],
+      question: "ignored",
+      group: "acme",
+    });
+
+    expect(res.status).toBe(400);
+  });
+
+  test("rejects queries + broadcast", async () => {
+    const res = await post("/ask", {
+      queries: [{ question: "Q1", targets: ["backend"] }],
+      broadcast: true,
+      group: "acme",
+    });
+
+    expect(res.status).toBe(400);
+  });
+
+  test("rejects empty queries array", async () => {
+    const res = await post("/ask", {
+      queries: [],
+      group: "acme",
+    });
+
+    expect(res.status).toBe(400);
+  });
+
+  test("rejects more than 5 query groups", async () => {
+    const res = await post("/ask", {
+      queries: Array.from({ length: 6 }, (_, i) => ({
+        question: `Q${i}`,
+        targets: ["backend"],
+      })),
+      group: "acme",
+    });
+
+    expect(res.status).toBe(400);
+  });
+});

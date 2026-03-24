@@ -18,3 +18,4 @@ export const DEFAULT_FORK_TTL_MS = 15 * 60 * 1000; // 15 minutes
 export const DEFAULT_MAX_SUMMARY_AGE_MS = 24 * 60 * 60 * 1000; // 24 hours
 export const DEFAULT_MAX_FAN_OUT = 5;
 export const DEFAULT_MAX_CONCURRENT_FORKS = 5;
+export const DEFAULT_MAX_QUERIES = 5;
