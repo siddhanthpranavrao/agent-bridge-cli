@@ -10,17 +10,19 @@ When you're working across multiple codebases — a frontend, a backend, a datab
 # 1. Install
 npm install -g agent-bridge-cli
 
-# 2. Inside Claude Code, connect to a group
-/bridge connect myproject
+# 2. In your frontend Claude Code session
+/bridge connect myproject --name frontend
 
-# 3. In another Claude Code session, connect to the same group
-/bridge connect myproject
+# 3. In your backend Claude Code session
+/bridge connect myproject --name backend
 
-# 4. Ask the other session a question
+# 4. From the frontend, ask the backend a question
 /bridge ask backend "What does the /users endpoint expect?"
 ```
 
-> New to groups and session names? See [Groups, Sessions, and Names](#groups-sessions-and-names) below.
+The `--name` flag is optional — if you don't provide it, the name is auto-derived from your working directory (e.g. `/projects/acme-api` becomes `acme-api`).
+
+> Want to understand groups and names better? See [Groups, Sessions, and Names](#groups-sessions-and-names) below.
 
 The broker starts automatically when you first run `/bridge connect`. If it doesn't start automatically, you can start it manually with `agent-bridge &`.
 
