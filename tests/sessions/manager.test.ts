@@ -113,6 +113,198 @@ describe("SessionManager - registration (happy path)", () => {
   });
 });
 
+describe("SessionManager - name sanitization", () => {
+  test("lowercases name", async () => {
+    const session = await manager.register({
+      sessionId: "s1",
+      claudeSessionId: "uuid-1",
+      pid: process.pid,
+      workingDirectory: "/projects/MyBackend",
+    });
+    expect(session.name).toBe("mybackend");
+  });
+
+  test("replaces spaces with hyphens", async () => {
+    const session = await manager.register({
+      sessionId: "s1",
+      claudeSessionId: "uuid-1",
+      pid: process.pid,
+      workingDirectory: "/projects/my backend app",
+    });
+    expect(session.name).toBe("my-backend-app");
+  });
+
+  test("replaces special characters with hyphens", async () => {
+    const session = await manager.register({
+      sessionId: "s1",
+      claudeSessionId: "uuid-1",
+      pid: process.pid,
+      workingDirectory: "/projects/API.Service_v2",
+    });
+    expect(session.name).toBe("api-service-v2");
+  });
+
+  test("collapses multiple hyphens", async () => {
+    const session = await manager.register({
+      sessionId: "s1",
+      claudeSessionId: "uuid-1",
+      pid: process.pid,
+      workingDirectory: "/projects/my---app",
+    });
+    expect(session.name).toBe("my-app");
+  });
+
+  test("trims leading and trailing hyphens", async () => {
+    const session = await manager.register({
+      sessionId: "s1",
+      claudeSessionId: "uuid-1",
+      pid: process.pid,
+      workingDirectory: "/projects/-my-app-",
+    });
+    expect(session.name).toBe("my-app");
+  });
+
+  test("falls back to 'unnamed' for all-special-char directories", async () => {
+    const session = await manager.register({
+      sessionId: "s1",
+      claudeSessionId: "uuid-1",
+      pid: process.pid,
+      workingDirectory: "/projects/!!!",
+    });
+    expect(session.name).toBe("unnamed");
+  });
+
+  test("preserves hyphens in directory names", async () => {
+    const session = await manager.register({
+      sessionId: "s1",
+      claudeSessionId: "uuid-1",
+      pid: process.pid,
+      workingDirectory: "/projects/hermes-svc",
+    });
+    expect(session.name).toBe("hermes-svc");
+  });
+
+  test("sanitizes explicitly provided name too", async () => {
+    const session = await manager.register({
+      sessionId: "s1",
+      claudeSessionId: "uuid-1",
+      pid: process.pid,
+      workingDirectory: "/projects/whatever",
+      name: "My Backend!",
+    });
+    expect(session.name).toBe("my-backend");
+  });
+});
+
+describe("SessionManager - duplicate name handling", () => {
+  test("auto-suffixes duplicate names in same group", async () => {
+    const s1 = await manager.register({
+      sessionId: "s1",
+      claudeSessionId: "uuid-1",
+      pid: process.pid,
+      workingDirectory: "/projects/hermes-svc",
+      group: "acme",
+    });
+    const s2 = await manager.register({
+      sessionId: "s2",
+      claudeSessionId: "uuid-2",
+      pid: process.pid,
+      workingDirectory: "/projects/hermes-svc",
+      group: "acme",
+    });
+
+    expect(s1.name).toBe("hermes-svc");
+    expect(s2.name).toBe("hermes-svc-2");
+  });
+
+  test("increments suffix for multiple duplicates", async () => {
+    await manager.register({
+      sessionId: "s1",
+      claudeSessionId: "uuid-1",
+      pid: process.pid,
+      workingDirectory: "/projects/app",
+      group: "acme",
+    });
+    await manager.register({
+      sessionId: "s2",
+      claudeSessionId: "uuid-2",
+      pid: process.pid,
+      workingDirectory: "/projects/app",
+      group: "acme",
+    });
+    const s3 = await manager.register({
+      sessionId: "s3",
+      claudeSessionId: "uuid-3",
+      pid: process.pid,
+      workingDirectory: "/projects/app",
+      group: "acme",
+    });
+
+    expect(s3.name).toBe("app-3");
+  });
+
+  test("allows same name in different groups", async () => {
+    const s1 = await manager.register({
+      sessionId: "s1",
+      claudeSessionId: "uuid-1",
+      pid: process.pid,
+      workingDirectory: "/projects/hermes-svc",
+      group: "acme",
+    });
+    const s2 = await manager.register({
+      sessionId: "s2",
+      claudeSessionId: "uuid-2",
+      pid: process.pid,
+      workingDirectory: "/projects/hermes-svc",
+      group: "personal",
+    });
+
+    expect(s1.name).toBe("hermes-svc");
+    expect(s2.name).toBe("hermes-svc"); // no suffix — different group
+  });
+
+  test("does not suffix when name is unique in group", async () => {
+    await manager.register({
+      sessionId: "s1",
+      claudeSessionId: "uuid-1",
+      pid: process.pid,
+      workingDirectory: "/projects/frontend",
+      group: "acme",
+    });
+    const s2 = await manager.register({
+      sessionId: "s2",
+      claudeSessionId: "uuid-2",
+      pid: process.pid,
+      workingDirectory: "/projects/backend",
+      group: "acme",
+    });
+
+    expect(s2.name).toBe("backend"); // unique, no suffix
+  });
+
+  test("reuses freed name after deregistration", async () => {
+    const s1 = await manager.register({
+      sessionId: "s1",
+      claudeSessionId: "uuid-1",
+      pid: process.pid,
+      workingDirectory: "/projects/app",
+      group: "acme",
+    });
+    expect(s1.name).toBe("app");
+
+    await manager.deregister("s1");
+
+    const s2 = await manager.register({
+      sessionId: "s2",
+      claudeSessionId: "uuid-2",
+      pid: process.pid,
+      workingDirectory: "/projects/app",
+      group: "acme",
+    });
+    expect(s2.name).toBe("app"); // name freed, no suffix needed
+  });
+});
+
 describe("SessionManager - registration (negative)", () => {
   test("rejects duplicate sessionId", async () => {
     await manager.register({

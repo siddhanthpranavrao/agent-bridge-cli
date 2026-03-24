@@ -4,6 +4,19 @@ import type { Storage } from "../storage/storage.ts";
 import { RegisterRequestSchema, SessionSchema, type Session, type RegisterRequest } from "./types.ts";
 import { fuzzyMatch } from "../utils/fuzzy.ts";
 
+/**
+ * Sanitize a session name to be CLI-friendly:
+ * lowercase, alphanumeric + hyphens only, no spaces or special chars.
+ */
+function sanitizeName(raw: string): string {
+  return raw
+    .toLowerCase()
+    .replace(/[^a-z0-9-]/g, "-")   // replace non-alphanumeric (except hyphen) with hyphen
+    .replace(/-+/g, "-")            // collapse multiple hyphens
+    .replace(/^-|-$/g, "")          // trim leading/trailing hyphens
+    || "unnamed";                   // fallback if empty after sanitization
+}
+
 export class SessionManager {
   private readonly storage: Storage;
   private readonly sessions: Map<string, Session> = new Map();
@@ -22,7 +35,8 @@ export class SessionManager {
     }
 
     const group = parsed.group ?? DEFAULT_GROUP_NAME;
-    const name = parsed.name ?? basename(parsed.workingDirectory);
+    const rawName = parsed.name ?? basename(parsed.workingDirectory);
+    const name = this.uniquifyName(sanitizeName(rawName), group);
 
     const session: Session = SessionSchema.parse({
       sessionId: parsed.sessionId,
@@ -154,6 +168,24 @@ export class SessionManager {
 
   getSessionCount(): number {
     return this.sessions.size;
+  }
+
+  /**
+   * If a name already exists in the group, auto-suffix with -2, -3, etc.
+   */
+  private uniquifyName(name: string, group: string): string {
+    const groupSessions = this.listByGroup(group);
+    const existingNames = new Set(groupSessions.map((s) => s.name.toLowerCase()));
+
+    if (!existingNames.has(name.toLowerCase())) {
+      return name;
+    }
+
+    let suffix = 2;
+    while (existingNames.has(`${name}-${suffix}`)) {
+      suffix++;
+    }
+    return `${name}-${suffix}`;
   }
 
   private groupFilePath(group: string): string {

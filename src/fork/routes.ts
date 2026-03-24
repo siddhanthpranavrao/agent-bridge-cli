@@ -4,6 +4,7 @@ import { AskRequestSchema, type AskResponse } from "./types.ts";
 import type { ForkManager } from "./manager.ts";
 import type { SessionManager } from "../sessions/manager.ts";
 import type { SummaryEngine } from "../summary/engine.ts";
+import type { Session } from "../sessions/types.ts";
 import { ZodError } from "zod";
 
 function sendJson(res: ServerResponse, status: number, data: unknown): void {
@@ -28,6 +29,142 @@ function parseJsonBody(body: string): unknown {
   }
 }
 
+/**
+ * Ask a specific session and return the response.
+ * Handles summary query → fork fallback → enrichment.
+ */
+async function askSession(
+  targetSession: Session,
+  question: string,
+  summaryEngine: SummaryEngine,
+  forkManager: ForkManager,
+  hint?: string
+): Promise<AskResponse> {
+  // Generate summary if it doesn't exist
+  if (!(await summaryEngine.hasSummary(targetSession.sessionId))) {
+    await summaryEngine.generate(
+      targetSession.sessionId,
+      targetSession.claudeSessionId
+    );
+  }
+
+  // Try to answer from summary
+  const summaryAnswer = await summaryEngine.query(
+    targetSession.sessionId,
+    question
+  );
+
+  if (summaryAnswer !== INSUFFICIENT_CONTEXT) {
+    const suffix = hint ? ` ${hint}` : "";
+    return {
+      answer: `[via ${targetSession.name}] ${summaryAnswer}${suffix}`,
+      source: targetSession.name,
+      fromFork: false,
+    };
+  }
+
+  // Fork and ask (summary couldn't answer)
+  const result = await forkManager.forkAndAsk(
+    targetSession.claudeSessionId,
+    question
+  );
+
+  // Check if fork also couldn't answer
+  if (result.answer.includes(INSUFFICIENT_CONTEXT)) {
+    return {
+      answer: `[via ${targetSession.name}] Unable to answer this question. The session does not have enough context about this topic.`,
+      source: targetSession.name,
+      fromFork: true,
+    };
+  }
+
+  // Enrich summary in background
+  summaryEngine
+    .enrich(targetSession.sessionId, question, result.answer)
+    .catch(() => {});
+
+  const suffix = hint ? ` ${hint}` : "";
+  return {
+    answer: `[via ${targetSession.name}] ${result.answer}${suffix}`,
+    source: targetSession.name,
+    fromFork: true,
+  };
+}
+
+/**
+ * Auto-route: find the best session to answer the question.
+ */
+async function autoRoute(
+  group: string,
+  question: string,
+  sessionManager: SessionManager,
+  summaryEngine: SummaryEngine,
+  forkManager: ForkManager
+): Promise<{ response: AskResponse; status: number }> {
+  const sessions = sessionManager.listByGroup(group);
+  const aliveSessions = sessions.filter((s) =>
+    sessionManager.validateAlive(s.sessionId)
+  );
+
+  if (aliveSessions.length === 0) {
+    return {
+      response: { answer: "", source: "", fromFork: false },
+      status: 404,
+    };
+  }
+
+  // Rank sessions by summary relevance (keyword-based, zero LLM cost)
+  const ranked = await summaryEngine.rankSessions(
+    aliveSessions.map((s) => s.sessionId),
+    question
+  );
+
+  const hint = "(Tip: use '/bridge ask <name>' for direct targeting)";
+
+  if (ranked.length > 0) {
+    const bestSession = aliveSessions.find(
+      (s) => s.sessionId === ranked[0]!.sessionId
+    )!;
+    const response = await askSession(
+      bestSession,
+      question,
+      summaryEngine,
+      forkManager,
+      hint
+    );
+    return { response, status: 200 };
+  }
+
+  // Broadcasting fallback: try each session's summary
+  for (const session of aliveSessions) {
+    if (!(await summaryEngine.hasSummary(session.sessionId))) {
+      await summaryEngine.generate(session.sessionId, session.claudeSessionId);
+    }
+
+    const answer = await summaryEngine.query(session.sessionId, question);
+    if (answer !== INSUFFICIENT_CONTEXT) {
+      return {
+        response: {
+          answer: `[via ${session.name}] ${answer} ${hint}`,
+          source: session.name,
+          fromFork: false,
+        },
+        status: 200,
+      };
+    }
+  }
+
+  // No session could answer
+  return {
+    response: {
+      answer: `No session in group "${group}" has relevant context for this question.`,
+      source: "",
+      fromFork: false,
+    },
+    status: 404,
+  };
+}
+
 export async function handleAskRoute(
   req: IncomingMessage,
   res: ServerResponse,
@@ -47,7 +184,26 @@ export async function handleAskRoute(
 
     const parsed = AskRequestSchema.parse(body);
 
-    // Resolve target session
+    // Path B: Auto-routing (no targetSession specified)
+    if (!parsed.targetSession) {
+      const { response, status } = await autoRoute(
+        parsed.group,
+        parsed.question,
+        sessionManager,
+        summaryEngine,
+        forkManager
+      );
+
+      if (status === 404) {
+        return sendJson(res, 404, {
+          error: response.answer || `No active sessions in group "${parsed.group}"`,
+        });
+      }
+
+      return sendJson(res, 200, response);
+    }
+
+    // Path A: Targeted ask (existing behavior)
     const targetSession = sessionManager.resolve(
       parsed.targetSession,
       parsed.group
@@ -58,63 +214,18 @@ export async function handleAskRoute(
       });
     }
 
-    // Check if session is alive
     if (!sessionManager.validateAlive(targetSession.sessionId)) {
       return sendJson(res, 404, {
         error: `Session "${targetSession.name}" is no longer alive`,
       });
     }
 
-    // Step 1: Generate summary if it doesn't exist
-    if (!(await summaryEngine.hasSummary(targetSession.sessionId))) {
-      await summaryEngine.generate(
-        targetSession.sessionId,
-        targetSession.claudeSessionId
-      );
-    }
-
-    // Step 2: Try to answer from summary
-    const summaryAnswer = await summaryEngine.query(
-      targetSession.sessionId,
-      parsed.question
+    const response = await askSession(
+      targetSession,
+      parsed.question,
+      summaryEngine,
+      forkManager
     );
-
-    if (summaryAnswer !== INSUFFICIENT_CONTEXT) {
-      const response: AskResponse = {
-        answer: `[via ${targetSession.name}] ${summaryAnswer}`,
-        source: targetSession.name,
-        fromFork: false,
-      };
-      return sendJson(res, 200, response);
-    }
-
-    // Step 3: Fork and ask (summary couldn't answer)
-    const result = await forkManager.forkAndAsk(
-      targetSession.claudeSessionId,
-      parsed.question
-    );
-
-    // Step 4: Check if fork also couldn't answer
-    if (result.answer.includes(INSUFFICIENT_CONTEXT)) {
-      const response: AskResponse = {
-        answer: `[via ${targetSession.name}] Unable to answer this question. The session does not have enough context about this topic.`,
-        source: targetSession.name,
-        fromFork: true,
-      };
-      return sendJson(res, 200, response);
-    }
-
-    // Step 5: Enrich summary with new knowledge (background, don't block response)
-    summaryEngine
-      .enrich(targetSession.sessionId, parsed.question, result.answer)
-      .catch(() => {});
-
-    // Step 6: Return fork answer
-    const response: AskResponse = {
-      answer: `[via ${targetSession.name}] ${result.answer}`,
-      source: targetSession.name,
-      fromFork: true,
-    };
     return sendJson(res, 200, response);
   } catch (err) {
     if (err instanceof ZodError) {

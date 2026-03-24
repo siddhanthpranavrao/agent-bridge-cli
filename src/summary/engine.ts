@@ -151,6 +151,32 @@ export class SummaryEngine {
     });
   }
 
+  /**
+   * Rank sessions by how relevant their summaries are to a question.
+   * Uses keyword matching — zero LLM cost.
+   * Returns sorted descending by score, filtered to score > 0.
+   */
+  async rankSessions(
+    sessionIds: string[],
+    question: string
+  ): Promise<{ sessionId: string; score: number }[]> {
+    const results: { sessionId: string; score: number }[] = [];
+
+    for (const sessionId of sessionIds) {
+      const summary = await this.getSummary(sessionId);
+      if (!summary || summary.entries.length === 0) {
+        continue;
+      }
+
+      const matched = this.findMatchingEntries(summary.entries, question);
+      if (matched.length > 0) {
+        results.push({ sessionId, score: matched.length });
+      }
+    }
+
+    return results.sort((a, b) => b.score - a.score);
+  }
+
   private extractWords(text: string): string[] {
     return text
       .toLowerCase()

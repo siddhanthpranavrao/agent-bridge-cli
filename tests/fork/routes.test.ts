@@ -306,3 +306,118 @@ describe("POST /ask - dead session", () => {
     expect(body.error).toContain("no longer alive");
   });
 });
+
+describe("POST /ask - auto-routing (no targetSession)", () => {
+  test("routes to correct session based on summary", async () => {
+    // The default mockSummaryGenerate returns empty entries,
+    // so we need a broker with summaries that have content.
+    const backendEntries: SummaryEntry[] = [
+      { topic: "/users endpoint", content: "POST /users expects { email, password }", addedAt: Date.now() },
+      { topic: "authentication", content: "JWT auth at POST /auth/login", addedAt: Date.now() },
+    ];
+    const frontendEntries: SummaryEntry[] = [
+      { topic: "React components", content: "UserProfile component in src/components", addedAt: Date.now() },
+    ];
+
+    let generateCallSession = "";
+    const routingDeps = {
+      ...mockDeps,
+      summaryGenerate: async (claudeSessionId: string): Promise<SummaryEntry[]> => {
+        generateCallSession = claudeSessionId;
+        if (claudeSessionId === "claude-uuid-backend") return backendEntries;
+        if (claudeSessionId === "claude-uuid-frontend") return frontendEntries;
+        return [];
+      },
+      summaryQuery: async (entries: SummaryEntry[], _question: string): Promise<string> => {
+        if (entries.length > 0) return entries[0]!.content;
+        return INSUFFICIENT_CONTEXT;
+      },
+    };
+
+    const routingBroker = new BrokerServer(storage, undefined, routingDeps);
+    await routingBroker.start();
+    const routingUrl = `http://127.0.0.1:${routingBroker.getPort()}`;
+
+    // Register two sessions
+    await fetch(`${routingUrl}/sessions/register`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: "s1", claudeSessionId: "claude-uuid-backend",
+        pid: process.pid, workingDirectory: "/projects/backend", group: "acme", name: "backend",
+      }),
+    });
+    await fetch(`${routingUrl}/sessions/register`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: "s2", claudeSessionId: "claude-uuid-frontend",
+        pid: process.pid, workingDirectory: "/projects/frontend", group: "acme", name: "frontend",
+      }),
+    });
+
+    // First, generate summaries by asking targeted questions
+    await fetch(`${routingUrl}/ask`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ targetSession: "backend", question: "init", group: "acme" }),
+    });
+    await fetch(`${routingUrl}/ask`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ targetSession: "frontend", question: "init", group: "acme" }),
+    });
+
+    // Now auto-route: question about "users" should go to backend
+    const res = await fetch(`${routingUrl}/ask`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        question: "What does the users endpoint expect?",
+        group: "acme",
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json() as any;
+    expect(body.source).toBe("backend");
+    expect(body.answer).toContain("[via backend]");
+    expect(body.answer).toContain("Tip:");
+
+    await routingBroker.stop();
+  });
+
+  test("returns 404 when no sessions in group", async () => {
+    const res = await post("/ask", {
+      question: "test question",
+      group: "empty-group",
+    });
+
+    expect(res.status).toBe(404);
+  });
+
+  test("returns 404 when no session can answer", async () => {
+    // Default mocks return INSUFFICIENT_CONTEXT for everything
+    const res = await post("/ask", {
+      question: "What is the meaning of life?",
+      group: "acme",
+    });
+
+    expect(res.status).toBe(404);
+    const body = await res.json() as any;
+    expect(body.error).toContain("No session in group");
+  });
+
+  test("targeted ask still works with targetSession provided", async () => {
+    const res = await post("/ask", {
+      targetSession: "backend",
+      question: "test question",
+      group: "acme",
+    });
+
+    // Will get a fork answer since mock summary returns INSUFFICIENT_CONTEXT
+    expect(res.status).toBe(200);
+    const body = await res.json() as any;
+    expect(body.source).toBe("backend");
+  });
+});

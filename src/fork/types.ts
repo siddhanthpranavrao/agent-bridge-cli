@@ -2,7 +2,7 @@ import { z } from "zod";
 import { DEFAULT_FORK_TIMEOUT_MS } from "../constants.ts";
 
 export const AskRequestSchema = z.object({
-  targetSession: z.string().min(1),
+  targetSession: z.string().min(1).optional(),
   question: z.string().min(1),
   group: z.string().min(1),
   sourceSession: z.string().min(1).optional(),

@@ -271,6 +271,76 @@ describe("SummaryEngine - hasSummary", () => {
   });
 });
 
+describe("SummaryEngine - rankSessions", () => {
+  test("ranks sessions with matching summaries higher", async () => {
+    const engine = new SummaryEngine(storage, mockGenerateFn, mockQueryFn, mockEnrichFn);
+
+    // Create different summaries for different sessions
+    const backendGenerate: GenerateFn = async () => [
+      { topic: "/users endpoint", content: "POST /users", addedAt: Date.now() },
+      { topic: "authentication", content: "JWT auth", addedAt: Date.now() },
+    ];
+    const frontendGenerate: GenerateFn = async () => [
+      { topic: "React components", content: "UserProfile component", addedAt: Date.now() },
+    ];
+
+    const backendEngine = new SummaryEngine(storage, backendGenerate, mockQueryFn, mockEnrichFn);
+    await backendEngine.generate("backend", "uuid-1");
+
+    const frontendEngine = new SummaryEngine(storage, frontendGenerate, mockQueryFn, mockEnrichFn);
+    await frontendEngine.generate("frontend", "uuid-2");
+
+    const ranked = await engine.rankSessions(["backend", "frontend"], "users authentication");
+
+    expect(ranked.length).toBe(1);
+    expect(ranked[0]!.sessionId).toBe("backend");
+    expect(ranked[0]!.score).toBe(2); // matches both "users" and "authentication"
+  });
+
+  test("returns empty when no sessions have summaries", async () => {
+    const engine = new SummaryEngine(storage, mockGenerateFn, mockQueryFn, mockEnrichFn);
+    const ranked = await engine.rankSessions(["s1", "s2"], "any question");
+    expect(ranked).toEqual([]);
+  });
+
+  test("returns empty when no summaries match the question", async () => {
+    const engine = new SummaryEngine(storage, mockGenerateFn, mockQueryFn, mockEnrichFn);
+    await engine.generate("s1", "uuid-1");
+
+    const ranked = await engine.rankSessions(["s1"], "kubernetes deployment");
+    expect(ranked).toEqual([]);
+  });
+
+  test("sorts by score descending", async () => {
+    const engine = new SummaryEngine(storage, mockGenerateFn, mockQueryFn, mockEnrichFn);
+    // mockEntries has: "/users endpoint", "authentication flow", "database schema"
+    await engine.generate("s1", "uuid-1");
+
+    // Create session with only one matching entry
+    const singleGenerate: GenerateFn = async () => [
+      { topic: "database migrations", content: "migration files", addedAt: Date.now() },
+    ];
+    const singleEngine = new SummaryEngine(storage, singleGenerate, mockQueryFn, mockEnrichFn);
+    await singleEngine.generate("s2", "uuid-2");
+
+    const ranked = await engine.rankSessions(["s1", "s2"], "database schema");
+
+    expect(ranked.length).toBe(2);
+    expect(ranked[0]!.sessionId).toBe("s1"); // "database schema" matches topic
+    expect(ranked[1]!.sessionId).toBe("s2"); // "database" matches "database migrations"
+  });
+
+  test("skips sessions without summaries", async () => {
+    const engine = new SummaryEngine(storage, mockGenerateFn, mockQueryFn, mockEnrichFn);
+    await engine.generate("s1", "uuid-1");
+    // s2 has no summary
+
+    const ranked = await engine.rankSessions(["s1", "s2"], "users endpoint");
+    expect(ranked.length).toBe(1);
+    expect(ranked[0]!.sessionId).toBe("s1");
+  });
+});
+
 describe("SummaryEngine - persistence", () => {
   test("summary survives write-read cycle", async () => {
     const engine1 = new SummaryEngine(storage, mockGenerateFn, mockQueryFn, mockEnrichFn);
