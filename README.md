@@ -20,7 +20,9 @@ npm install -g agent-bridge-cli
 /bridge ask backend "What does the /users endpoint expect?"
 ```
 
-The `--name` flag is optional — if you don't provide it, the name is auto-derived from your working directory (e.g. `/projects/acme-api` becomes `acme-api`).
+The `--name` flag is optional. If you don't provide it, the name is either:
+- **Inferred by Claude Code** from your conversation context (e.g., if you said "focus on the frontend", Claude Code may name the session `frontend` automatically)
+- **Auto-derived** from your working directory (e.g., `/projects/acme-api` becomes `acme-api`)
 
 > Want to understand groups and names better? See [Groups, Sessions, and Names](#groups-sessions-and-names) below.
 
