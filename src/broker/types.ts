@@ -20,6 +20,16 @@ export interface BrokerStatus {
   sessions: number;
 }
 
+export interface BrokerDetailedStatus extends BrokerStatus {
+  groups: {
+    name: string;
+    sessionCount: number;
+    sessions: { name: string; sessionId: string; alive: boolean }[];
+  }[];
+  activeForks: number;
+  summaries: number;
+}
+
 export const DEFAULT_BROKER_CONFIG: BrokerConfig = {
   port: 0,
   host: "127.0.0.1",

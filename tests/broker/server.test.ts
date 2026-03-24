@@ -276,3 +276,52 @@ describe("BrokerServer - manual shutdown endpoint", () => {
     expect(res.status).toBe(405);
   });
 });
+
+describe("BrokerServer - status endpoint", () => {
+  test("GET /status returns 200 with detailed info", async () => {
+    await broker.start();
+    const port = broker.getPort();
+
+    // Register a session
+    await fetch(`http://127.0.0.1:${port}/sessions/register`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: "s1", claudeSessionId: "uuid-1",
+        pid: process.pid, workingDirectory: "/projects/test", group: "acme",
+      }),
+    });
+
+    const res = await fetch(`http://127.0.0.1:${port}/status`);
+    expect(res.status).toBe(200);
+    const body = await res.json() as any;
+
+    expect(body.pid).toBe(process.pid);
+    expect(body.status).toBe("ok");
+    expect(body.sessions).toBe(1);
+    expect(body.groups).toBeDefined();
+    expect(body.groups.length).toBe(1);
+    expect(body.groups[0].name).toBe("acme");
+    expect(body.groups[0].sessionCount).toBe(1);
+    expect(body.groups[0].sessions[0].name).toBe("test");
+    expect(body.groups[0].sessions[0].alive).toBe(true);
+    expect(typeof body.activeForks).toBe("number");
+    expect(typeof body.summaries).toBe("number");
+  });
+
+  test("POST /status returns 405", async () => {
+    await broker.start();
+    const port = broker.getPort();
+    const res = await fetch(`http://127.0.0.1:${port}/status`, { method: "POST" });
+    expect(res.status).toBe(405);
+  });
+
+  test("status with no sessions shows empty groups", async () => {
+    await broker.start();
+    const port = broker.getPort();
+    const res = await fetch(`http://127.0.0.1:${port}/status`);
+    const body = await res.json() as any;
+    expect(body.groups).toEqual([]);
+    expect(body.sessions).toBe(0);
+  });
+});

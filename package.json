@@ -10,7 +10,9 @@
   "scripts": {
     "dev": "bun run src/index.ts",
     "build": "bun build --target=node ./src/index.ts --outfile=dist/index.js",
-    "test": "bun test"
+    "test": "bun test",
+    "postinstall": "node -e \"const fs=require('fs'),p=require('path'),d=p.join(require('os').homedir(),'.claude','skills','bridge');fs.mkdirSync(d,{recursive:true});fs.copyFileSync(p.join(__dirname,'skill','SKILL.md'),p.join(d,'SKILL.md'))\"",
+    "preuninstall": "node -e \"try{require('fs').rmSync(require('path').join(require('os').homedir(),'.claude','skills','bridge'),{recursive:true})}catch{}\""
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.81",
@@ -21,7 +23,8 @@
     "typescript": "^5"
   },
   "files": [
-    "dist/**/*.js"
+    "dist/**/*.js",
+    "skill/**/*.md"
   ],
   "license": "MIT",
   "repository": {

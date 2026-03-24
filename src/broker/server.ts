@@ -8,7 +8,8 @@ import { handleAskRoute } from "../fork/routes.ts";
 import type { ForkerFn } from "../fork/types.ts";
 import { SummaryEngine } from "../summary/engine.ts";
 import type { GenerateFn, QueryFn, EnrichFn } from "../summary/types.ts";
-import { DEFAULT_BROKER_CONFIG, type BrokerConfig, type BrokerStatus } from "./types.ts";
+import { SUMMARIES_DIR } from "../constants.ts";
+import { DEFAULT_BROKER_CONFIG, type BrokerConfig, type BrokerStatus, type BrokerDetailedStatus } from "./types.ts";
 
 export interface BrokerDeps {
   forker?: ForkerFn;
@@ -94,6 +95,7 @@ export class BrokerServer {
 
     this.stopping = true;
     this.cancelIdleTimeout();
+    this.forkManager.dispose();
 
     await new Promise<void>((resolve, reject) => {
       this.server!.close((err) => {
@@ -135,6 +137,34 @@ export class BrokerServer {
     return this.summaryEngine;
   }
 
+  async getDetailedStatus(): Promise<BrokerDetailedStatus> {
+    const basic = this.getStatus();
+    const groupNames = this.sessionManager.listAllGroups();
+
+    const groups = groupNames.map((name) => {
+      const sessions = this.sessionManager.listByGroup(name);
+      return {
+        name,
+        sessionCount: sessions.length,
+        sessions: sessions.map((s) => ({
+          name: s.name,
+          sessionId: s.sessionId,
+          alive: this.sessionManager.validateAlive(s.sessionId),
+        })),
+      };
+    });
+
+    const summaryFiles = await this.storage.listDir(SUMMARIES_DIR);
+    const summaries = summaryFiles.filter((f) => f.endsWith(".json")).length;
+
+    return {
+      ...basic,
+      groups,
+      activeForks: this.forkManager.getActiveForkCount(),
+      summaries,
+    };
+  }
+
   private checkSessionCount(): void {
     if (this.sessionManager.getSessionCount() === 0) {
       this.startIdleTimeout();
@@ -166,6 +196,20 @@ export class BrokerServer {
       const status = this.getStatus();
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify(status));
+      return;
+    }
+
+    // Detailed status endpoint
+    if (path === "/status") {
+      if (req.method !== "GET") {
+        res.writeHead(405, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Method not allowed" }));
+        return;
+      }
+      this.getDetailedStatus().then((status) => {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(status));
+      });
       return;
     }
 
