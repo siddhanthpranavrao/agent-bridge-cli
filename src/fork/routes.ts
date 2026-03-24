@@ -44,7 +44,8 @@ async function askSession(
   if (!(await summaryEngine.hasSummary(targetSession.sessionId))) {
     await summaryEngine.generate(
       targetSession.sessionId,
-      targetSession.claudeSessionId
+      targetSession.claudeSessionId,
+      targetSession.workingDirectory
     );
   }
 
@@ -66,7 +67,8 @@ async function askSession(
   // Fork and ask (summary couldn't answer)
   const result = await forkManager.forkAndAsk(
     targetSession.claudeSessionId,
-    question
+    question,
+    targetSession.workingDirectory
   );
 
   // Check if fork also couldn't answer
@@ -138,7 +140,7 @@ async function autoRoute(
   // Broadcasting fallback: try each session's summary
   for (const session of aliveSessions) {
     if (!(await summaryEngine.hasSummary(session.sessionId))) {
-      await summaryEngine.generate(session.sessionId, session.claudeSessionId);
+      await summaryEngine.generate(session.sessionId, session.claudeSessionId, session.workingDirectory);
     }
 
     const answer = await summaryEngine.query(session.sessionId, question);

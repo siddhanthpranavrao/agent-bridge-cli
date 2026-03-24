@@ -15,7 +15,8 @@ interface CachedFork {
 async function defaultForker(
   claudeSessionId: string,
   question: string,
-  config: ForkConfig
+  config: ForkConfig,
+  cwd?: string
 ): Promise<ForkResult> {
   const startTime = Date.now();
   let forkSessionId = "";
@@ -30,6 +31,7 @@ async function defaultForker(
       options: {
         resume: claudeSessionId,
         forkSession: true,
+        cwd,
         systemPrompt: {
           type: "preset",
           preset: "claude_code",
@@ -76,18 +78,19 @@ export class ForkManager {
 
   async forkAndAsk(
     claudeSessionId: string,
-    question: string
+    question: string,
+    cwd?: string
   ): Promise<ForkResult> {
     // Check cache for a reusable fork
     const cached = this.forkCache.get(claudeSessionId);
     if (cached && !this.isExpired(cached)) {
       cached.lastUsedAt = Date.now();
       // Reuse: call forker with the fork's session ID to continue its conversation
-      return this.forker(cached.forkSessionId, question, this.config);
+      return this.forker(cached.forkSessionId, question, this.config, cwd);
     }
 
     // No usable cache — create new fork
-    const result = await this.forker(claudeSessionId, question, this.config);
+    const result = await this.forker(claudeSessionId, question, this.config, cwd);
 
     // Cache the fork for future reuse
     if (result.forkSessionId) {

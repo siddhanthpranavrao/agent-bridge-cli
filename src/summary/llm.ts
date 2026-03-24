@@ -65,12 +65,13 @@ async function collectResult(stream: AsyncGenerator<SDKMessage, void>): Promise<
   return result;
 }
 
-export const defaultGenerateFn: GenerateFn = async (claudeSessionId) => {
+export const defaultGenerateFn: GenerateFn = async (claudeSessionId, cwd?) => {
   const stream = query({
     prompt: GENERATE_PROMPT,
     options: {
       resume: claudeSessionId,
       forkSession: true,
+      cwd,
       allowedTools: ["Read", "Glob", "Grep"],
       persistSession: false,
       maxTurns: 3,

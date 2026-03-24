@@ -31,7 +31,8 @@ export const DEFAULT_SUMMARY_CONFIG: SummaryConfig = {
 
 /** Generates a comprehensive knowledge dump from a Claude Code session. */
 export type GenerateFn = (
-  claudeSessionId: string
+  claudeSessionId: string,
+  cwd?: string
 ) => Promise<SummaryEntry[]>;
 
 /** Answers a question from summary entries, or returns "INSUFFICIENT_CONTEXT". */

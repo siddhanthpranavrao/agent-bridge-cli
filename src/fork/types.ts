@@ -31,7 +31,8 @@ export interface ForkConfig {
 export type ForkerFn = (
   claudeSessionId: string,
   question: string,
-  config: ForkConfig
+  config: ForkConfig,
+  cwd?: string
 ) => Promise<ForkResult>;
 
 export const DEFAULT_FORK_CONFIG: ForkConfig = {

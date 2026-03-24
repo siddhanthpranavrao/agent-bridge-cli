@@ -35,11 +35,12 @@ export class SummaryEngine {
 
   async generate(
     sessionId: string,
-    claudeSessionId: string
+    claudeSessionId: string,
+    cwd?: string
   ): Promise<Summary> {
     let entries: SummaryEntry[];
     try {
-      entries = await this.generateFn(claudeSessionId);
+      entries = await this.generateFn(claudeSessionId, cwd);
     } catch (err) {
       console.error("[bridge] Summary generation error:", err instanceof Error ? err.message : err);
       entries = [];
