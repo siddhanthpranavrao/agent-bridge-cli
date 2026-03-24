@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtemp, rm, mkdir } from "node:fs/promises";
+import { mkdtemp, rm, mkdir, access } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { Storage } from "../../src/storage/storage.ts";
@@ -152,5 +152,31 @@ describe("Storage - initDirectories", () => {
     await storage.initDirectories();
     expect(await storage.exists("groups")).toBe(true);
     expect(await storage.exists("summaries")).toBe(true);
+  });
+});
+
+describe("Storage - deleteAll", () => {
+  test("removes the entire base directory", async () => {
+    await storage.initDirectories();
+    await storage.write("test.txt", "data");
+
+    await storage.deleteAll();
+
+    // Base directory should no longer exist
+    let exists = true;
+    try {
+      await access(testDir);
+    } catch {
+      exists = false;
+    }
+    expect(exists).toBe(false);
+  });
+
+  test("is no-op if directory doesn't exist", async () => {
+    const nonexistentDir = join(tmpdir(), "agent-bridge-nonexistent-" + Date.now());
+    const s = new Storage({ baseDir: nonexistentDir });
+
+    // Should not throw
+    await s.deleteAll();
   });
 });

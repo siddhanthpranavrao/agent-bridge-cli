@@ -2,6 +2,7 @@ import { z } from "zod";
 import {
   DEFAULT_MAX_SUMMARY_ENTRIES,
   DEFAULT_MAX_ENTRY_SIZE_CHARS,
+  DEFAULT_MAX_SUMMARY_AGE_MS,
 } from "../constants.ts";
 
 export const SummaryEntrySchema = z.object({
@@ -22,11 +23,13 @@ export type Summary = z.infer<typeof SummarySchema>;
 export interface SummaryConfig {
   maxEntries: number;
   maxEntrySizeChars: number;
+  maxSummaryAgeMs: number;
 }
 
 export const DEFAULT_SUMMARY_CONFIG: SummaryConfig = {
   maxEntries: DEFAULT_MAX_SUMMARY_ENTRIES,
   maxEntrySizeChars: DEFAULT_MAX_ENTRY_SIZE_CHARS,
+  maxSummaryAgeMs: DEFAULT_MAX_SUMMARY_AGE_MS,
 };
 
 /** Generates a comprehensive knowledge dump from a Claude Code session. */

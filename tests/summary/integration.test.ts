@@ -233,8 +233,8 @@ describe("Tiered flow - no answer path", () => {
   });
 });
 
-describe("Tiered flow - cleanup", () => {
-  test("deregistering session deletes summary", async () => {
+describe("Tiered flow - summary preservation", () => {
+  test("deregistering session preserves summary", async () => {
     // First, trigger summary generation
     await post("/ask", {
       targetSession: "backend",
@@ -250,7 +250,8 @@ describe("Tiered flow - cleanup", () => {
     // Give the async callback time to run
     await new Promise((r) => setTimeout(r, 50));
 
-    expect(await storage.exists("summaries/claude-uuid-backend.json")).toBe(false);
+    // Summary should persist after deregister
+    expect(await storage.exists("summaries/claude-uuid-backend.json")).toBe(true);
   });
 });
 
@@ -270,11 +271,11 @@ describe("Tiered flow - reconnect reuses summary", () => {
     await post("/sessions/deregister", { sessionId: "s1" });
     await new Promise((r) => setTimeout(r, 50));
 
-    // Summary should be deleted on deregister
-    expect(await storage.exists("summaries/claude-uuid-backend.json")).toBe(false);
+    // Summary should persist after deregister
+    expect(await storage.exists("summaries/claude-uuid-backend.json")).toBe(true);
   });
 
-  test("same claudeSessionId reuses summary without regeneration", async () => {
+  test("same claudeSessionId reuses summary without regeneration after reconnect", async () => {
     // Ask triggers summary generation
     await post("/ask", {
       targetSession: "backend",
@@ -283,20 +284,10 @@ describe("Tiered flow - reconnect reuses summary", () => {
     });
     expect(generateCallCount).toBe(1);
 
-    // Ask again — should NOT regenerate (summary already exists)
-    await post("/ask", {
-      targetSession: "backend",
-      question: "authentication details",
-      group: "acme",
-    });
-    expect(generateCallCount).toBe(1); // still 1, not 2
-
-    // Register a second session with the SAME claudeSessionId but different bridge sessionId
-    // (simulates reconnecting the same Claude session)
+    // Disconnect and reconnect with same claudeSessionId but new bridge sessionId
     await post("/sessions/deregister", { sessionId: "s1" });
     await new Promise((r) => setTimeout(r, 50));
 
-    // Re-register with same claudeSessionId but new bridge sessionId
     await post("/sessions/register", {
       sessionId: "s1-reconnected",
       claudeSessionId: "claude-uuid-backend",
@@ -306,8 +297,13 @@ describe("Tiered flow - reconnect reuses summary", () => {
       name: "backend",
     });
 
-    // Note: summary was deleted on deregister, so it will need to regenerate
-    // But if we didn't deregister (just reconnected), the summary would persist
+    // Ask again — summary should be reused, NOT regenerated
+    await post("/ask", {
+      targetSession: "backend",
+      question: "authentication details",
+      group: "acme",
+    });
+    expect(generateCallCount).toBe(1); // still 1 — summary was reused
   });
 
   test("two sessions with different claudeSessionIds get separate summaries", async () => {

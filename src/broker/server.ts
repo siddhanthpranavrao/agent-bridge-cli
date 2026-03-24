@@ -43,11 +43,6 @@ export class BrokerServer {
       deps?.summaryEnrich
     );
 
-    // Wire up summary cleanup on session deregister
-    this.sessionManager.onDeregister((_sessionId, claudeSessionId) => {
-      this.summaryEngine.delete(claudeSessionId).catch(() => {});
-    });
-
     // Wire up reference counting
     this.sessionManager.onDeregister(() => this.checkSessionCount());
     this.sessionManager.onRegister(() => this.cancelIdleTimeout());

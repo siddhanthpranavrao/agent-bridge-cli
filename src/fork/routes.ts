@@ -40,8 +40,8 @@ async function askSession(
   forkManager: ForkManager,
   hint?: string
 ): Promise<AskResponse> {
-  // Generate summary if it doesn't exist (keyed by claudeSessionId for reuse across reconnects)
-  if (!(await summaryEngine.hasSummary(targetSession.claudeSessionId))) {
+  // Generate summary if it doesn't exist or is stale (keyed by claudeSessionId for reuse across reconnects)
+  if (!(await summaryEngine.hasFreshSummary(targetSession.claudeSessionId))) {
     await summaryEngine.generate(
       targetSession.claudeSessionId,
       targetSession.claudeSessionId,
@@ -139,7 +139,7 @@ async function autoRoute(
 
   // Broadcasting fallback: try each session's summary
   for (const session of aliveSessions) {
-    if (!(await summaryEngine.hasSummary(session.claudeSessionId))) {
+    if (!(await summaryEngine.hasFreshSummary(session.claudeSessionId))) {
       await summaryEngine.generate(session.claudeSessionId, session.claudeSessionId, session.workingDirectory);
     }
 

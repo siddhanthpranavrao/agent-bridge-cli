@@ -1,4 +1,4 @@
-import { readFile, writeFile, unlink, mkdir, access, readdir } from "node:fs/promises";
+import { readFile, writeFile, unlink, mkdir, access, readdir, rm } from "node:fs/promises";
 import { resolve, normalize } from "node:path";
 import {
   DEFAULT_BASE_DIR,
@@ -102,5 +102,9 @@ export class Storage {
     await mkdir(this.baseDir, { recursive: true });
     await this.ensureDir(GROUPS_DIR);
     await this.ensureDir(SUMMARIES_DIR);
+  }
+
+  async deleteAll(): Promise<void> {
+    await rm(this.baseDir, { recursive: true, force: true });
   }
 }

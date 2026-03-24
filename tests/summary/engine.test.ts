@@ -271,6 +271,75 @@ describe("SummaryEngine - hasSummary", () => {
   });
 });
 
+describe("SummaryEngine - hasFreshSummary", () => {
+  test("returns true for fresh summary", async () => {
+    const engine = new SummaryEngine(storage, mockGenerateFn, mockQueryFn, mockEnrichFn);
+    await engine.generate("s1", "claude-uuid-1");
+
+    expect(await engine.hasFreshSummary("s1")).toBe(true);
+  });
+
+  test("returns false for missing summary", async () => {
+    const engine = new SummaryEngine(storage, mockGenerateFn, mockQueryFn, mockEnrichFn);
+    expect(await engine.hasFreshSummary("nonexistent")).toBe(false);
+  });
+
+  test("returns false for stale summary", async () => {
+    const engine = new SummaryEngine(storage, mockGenerateFn, mockQueryFn, mockEnrichFn);
+
+    // Write a summary with generatedAt 25 hours ago
+    const staleSummary = {
+      sessionId: "s1",
+      generatedAt: Date.now() - 25 * 60 * 60 * 1000,
+      entries: [{ topic: "test", content: "test content", addedAt: Date.now() }],
+    };
+    await storage.write("summaries/s1.json", JSON.stringify(staleSummary));
+
+    expect(await engine.hasFreshSummary("s1")).toBe(false);
+  });
+
+  test("respects configurable maxSummaryAgeMs", async () => {
+    const engine = new SummaryEngine(storage, mockGenerateFn, mockQueryFn, mockEnrichFn, {
+      maxSummaryAgeMs: 1000, // 1 second
+    });
+
+    // Write a summary 2 seconds old — should be stale
+    const oldSummary = {
+      sessionId: "s1",
+      generatedAt: Date.now() - 2000,
+      entries: [{ topic: "test", content: "test content", addedAt: Date.now() }],
+    };
+    await storage.write("summaries/s1.json", JSON.stringify(oldSummary));
+    expect(await engine.hasFreshSummary("s1")).toBe(false);
+
+    // Write a summary 0.5 seconds old — should be fresh
+    const freshSummary = {
+      sessionId: "s1",
+      generatedAt: Date.now() - 500,
+      entries: [{ topic: "test", content: "test content", addedAt: Date.now() }],
+    };
+    await storage.write("summaries/s1.json", JSON.stringify(freshSummary));
+    expect(await engine.hasFreshSummary("s1")).toBe(true);
+  });
+
+  test("hasSummary still returns true for stale summaries", async () => {
+    const engine = new SummaryEngine(storage, mockGenerateFn, mockQueryFn, mockEnrichFn);
+
+    // Write a stale summary
+    const staleSummary = {
+      sessionId: "s1",
+      generatedAt: Date.now() - 25 * 60 * 60 * 1000,
+      entries: [{ topic: "test", content: "test content", addedAt: Date.now() }],
+    };
+    await storage.write("summaries/s1.json", JSON.stringify(staleSummary));
+
+    // hasSummary checks existence only — should be true
+    expect(await engine.hasSummary("s1")).toBe(true);
+    // hasFreshSummary checks age — should be false
+    expect(await engine.hasFreshSummary("s1")).toBe(false);
+  });
+});
+
 describe("SummaryEngine - rankSessions", () => {
   test("ranks sessions with matching summaries higher", async () => {
     const engine = new SummaryEngine(storage, mockGenerateFn, mockQueryFn, mockEnrichFn);

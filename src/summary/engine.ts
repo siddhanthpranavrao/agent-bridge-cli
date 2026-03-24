@@ -139,6 +139,15 @@ export class SummaryEngine {
     return await this.storage.exists(this.summaryPath(sessionId));
   }
 
+  async hasFreshSummary(sessionId: string): Promise<boolean> {
+    const summary = await this.getSummary(sessionId);
+    if (!summary) {
+      return false;
+    }
+    const age = Date.now() - summary.generatedAt;
+    return age < this.config.maxSummaryAgeMs;
+  }
+
   /**
    * Simple keyword matching: find entries whose topics overlap with question words.
    * This is a fast pre-filter — false negatives just trigger a fork (safe).

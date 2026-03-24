@@ -11,24 +11,31 @@ const args = process.argv.slice(2);
 if (args[0] === "--shutdown" || args[0] === "stop") {
   const storage = new Storage();
   const port = await storage.read(BROKER_PORT_FILE);
-  if (!port) {
-    console.log("Broker is not running.");
-    process.exit(0);
-  }
-  try {
-    const res = await fetch(`http://127.0.0.1:${port.trim()}/shutdown`, { method: "POST" });
-    if (res.ok) {
-      console.log("Broker shutdown requested.");
-    } else {
-      console.error("Failed to shutdown broker.");
+
+  if (port) {
+    try {
+      const res = await fetch(`http://127.0.0.1:${port.trim()}/shutdown`, { method: "POST" });
+      if (res.ok) {
+        console.log("Broker shutdown requested.");
+      } else {
+        console.error("Failed to shutdown broker.");
+      }
+    } catch {
+      console.error("Could not connect to broker. It may already be stopped.");
+      // Clean up stale files
+      await storage.delete(BROKER_PID_FILE);
+      await storage.delete(BROKER_PORT_FILE);
+      console.log("Cleaned up stale files.");
     }
-  } catch {
-    console.error("Could not connect to broker. It may already be stopped.");
-    // Clean up stale files
-    await storage.delete(BROKER_PID_FILE);
-    await storage.delete(BROKER_PORT_FILE);
-    console.log("Cleaned up stale files.");
+  } else if (!args.includes("--clean")) {
+    console.log("Broker is not running.");
   }
+
+  if (args.includes("--clean")) {
+    await storage.deleteAll();
+    console.log("Deleted all agent-bridge data (~/.agent-bridge/).");
+  }
+
   process.exit(0);
 }
 
@@ -55,6 +62,7 @@ if (args[0] === "--help" || args[0] === "help" || args[0] === "-h") {
 Usage:
   agent-bridge              Start the broker
   agent-bridge stop         Stop the broker
+  agent-bridge stop --clean Stop the broker and delete all data
   agent-bridge status       Show broker status
   agent-bridge help         Show this help message`);
   process.exit(0);
