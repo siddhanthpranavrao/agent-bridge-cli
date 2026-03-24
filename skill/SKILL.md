@@ -7,6 +7,11 @@ description: Communicate with other Claude Code sessions via the agent-bridge br
 
 You are handling the `/bridge` command for the agent-bridge tool. This tool lets multiple Claude Code instances communicate without polluting each other's context.
 
+## CRITICAL RULES
+
+1. **Always read the broker port fresh** from `~/.agent-bridge/broker.port` before EVERY command. NEVER reuse a port number from earlier in the conversation — the broker may have restarted on a different port.
+2. **For PID**, always determine the Claude Code process PID by running: `ps -o ppid= -p $$ | tr -d ' '` — this gets the parent process (Claude Code), not the temporary bash shell.
+
 ## Arguments: $ARGUMENTS
 
 Parse the first word as the subcommand. The rest are arguments for that subcommand.
@@ -22,52 +27,71 @@ Parse the first word as the subcommand. The rest are arguments for that subcomma
 
 ## How to execute
 
-First, read the broker port from `~/.agent-bridge/broker.port`. If the file doesn't exist, the broker is not running — start it with:
+**Before every command**, read the broker port fresh:
+
+```bash
+BRIDGE_PORT=$(cat ~/.agent-bridge/broker.port 2>/dev/null)
+```
+
+If the file doesn't exist, the broker is not running — start it with:
 
 ```bash
 agent-bridge &
+sleep 1
+BRIDGE_PORT=$(cat ~/.agent-bridge/broker.port)
 ```
 
-Or if installed locally: `npx agent-bridge &`
+Or if running from source: `bun run /path/to/agent-bridge/src/index.ts &`
 
-Then use `curl` to call the broker's HTTP API at `http://127.0.0.1:<port>`.
+Then use `curl` to call the broker's HTTP API at `http://127.0.0.1:$BRIDGE_PORT`.
 
 ### connect [group] [--name name]
 
 Register this session with the broker. You need to determine:
-- **sessionId**: A unique ID for this session (use a UUID or generate one)
-- **claudeSessionId**: This Claude Code session's ID (check the session info)
-- **pid**: The current process PID
-- **workingDirectory**: The current working directory
+- **sessionId**: Generate a UUID for this session (use `uuidgen` or similar)
+- **claudeSessionId**: This Claude Code session's ID
+- **pid**: The Claude Code process PID — get it with: `ps -o ppid= -p $$ | tr -d ' '`
+- **workingDirectory**: The current working directory (`pwd`)
 - **group**: From the argument (default: "default")
-- **name**: From `--name` flag or auto-derived from directory name
+- **name**: From `--name` flag, or omit to auto-derive from directory name
 
 ```bash
-curl -s -X POST http://127.0.0.1:<port>/sessions/register \
+BRIDGE_PORT=$(cat ~/.agent-bridge/broker.port)
+CLAUDE_PID=$(ps -o ppid= -p $$ | tr -d ' ')
+SESSION_ID=$(uuidgen)
+
+curl -s -X POST http://127.0.0.1:$BRIDGE_PORT/sessions/register \
   -H 'Content-Type: application/json' \
-  -d '{"sessionId":"<id>","claudeSessionId":"<claude-id>","pid":<pid>,"workingDirectory":"<cwd>","group":"<group>","name":"<name>"}'
+  -d "{\"sessionId\":\"$SESSION_ID\",\"claudeSessionId\":\"<claude-session-id>\",\"pid\":$CLAUDE_PID,\"workingDirectory\":\"$(pwd)\",\"group\":\"<group>\",\"name\":\"<name>\"}"
 ```
+
+Remember the sessionId for disconnect later.
 
 ### disconnect
 
 ```bash
-curl -s -X POST http://127.0.0.1:<port>/sessions/deregister \
+BRIDGE_PORT=$(cat ~/.agent-bridge/broker.port)
+curl -s -X POST http://127.0.0.1:$BRIDGE_PORT/sessions/deregister \
   -H 'Content-Type: application/json' \
   -d '{"sessionId":"<your-session-id>"}'
 ```
 
 ### ask [target] "question"
 
+Always read the port fresh before asking:
+
 If target is provided:
 ```bash
-curl -s -X POST http://127.0.0.1:<port>/ask \
+BRIDGE_PORT=$(cat ~/.agent-bridge/broker.port)
+curl -s -X POST http://127.0.0.1:$BRIDGE_PORT/ask \
   -H 'Content-Type: application/json' \
   -d '{"targetSession":"<target>","question":"<question>","group":"<group>"}'
 ```
 
 If no target (auto-route):
 ```bash
-curl -s -X POST http://127.0.0.1:<port>/ask \
+BRIDGE_PORT=$(cat ~/.agent-bridge/broker.port)
+curl -s -X POST http://127.0.0.1:$BRIDGE_PORT/ask \
   -H 'Content-Type: application/json' \
   -d '{"question":"<question>","group":"<group>"}'
 ```
@@ -77,7 +101,8 @@ Present the answer to the user. The response includes `answer`, `source`, and `f
 ### sessions
 
 ```bash
-curl -s http://127.0.0.1:<port>/sessions?group=<group>
+BRIDGE_PORT=$(cat ~/.agent-bridge/broker.port)
+curl -s http://127.0.0.1:$BRIDGE_PORT/sessions?group=<group>
 ```
 
 Present the sessions as a formatted list showing name, working directory, and status.
@@ -85,7 +110,8 @@ Present the sessions as a formatted list showing name, working directory, and st
 ### status
 
 ```bash
-curl -s http://127.0.0.1:<port>/status
+BRIDGE_PORT=$(cat ~/.agent-bridge/broker.port)
+curl -s http://127.0.0.1:$BRIDGE_PORT/status
 ```
 
 Present the status in a readable format: uptime, connected sessions per group, active forks, and summary count.
@@ -93,7 +119,8 @@ Present the status in a readable format: uptime, connected sessions per group, a
 ### shutdown
 
 ```bash
-curl -s -X POST http://127.0.0.1:<port>/shutdown
+BRIDGE_PORT=$(cat ~/.agent-bridge/broker.port)
+curl -s -X POST http://127.0.0.1:$BRIDGE_PORT/shutdown
 ```
 
 ## Error handling
