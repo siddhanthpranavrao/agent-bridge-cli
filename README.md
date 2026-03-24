@@ -27,12 +27,17 @@ Frontend Session                    Backend Session
 # 1. Install
 npm install -g agent-bridge-cli
 
-# 2. Start the broker (runs in background)
-agent-bridge &
-
-# 3. Inside Claude Code, use the /bridge command
+# 2. Inside Claude Code, connect to a group
 /bridge connect myproject
+
+# 3. Ask another session a question
 /bridge ask backend "What does the /users endpoint expect?"
+```
+
+The broker starts automatically when you first run `/bridge connect`. If it doesn't start automatically, you can start it manually:
+
+```bash
+agent-bridge &
 ```
 
 ## Installation
@@ -57,9 +62,20 @@ bun run dev    # start the broker
 
 The installer automatically adds the `/bridge` skill to `~/.claude/skills/bridge/` so it's available in all your Claude Code sessions.
 
-## Commands
+## CLI Commands
 
-All commands are run inside Claude Code via the `/bridge` skill:
+Run these in your terminal to manage the broker:
+
+```bash
+agent-bridge              # Start the broker
+agent-bridge stop         # Stop the broker
+agent-bridge status       # Show broker status (sessions, groups, forks)
+agent-bridge help         # Show help
+```
+
+## /bridge Commands
+
+Run these inside Claude Code to interact with the bridge:
 
 ### `/bridge connect [group] [--name <name>]`
 
@@ -271,6 +287,20 @@ All LLM calls are dependency-injected, so tests run without Claude Code or API a
 - **Zod** for schema validation
 - **Claude Agent SDK** for session forking
 - Zero external runtime dependencies beyond Zod and the Agent SDK
+
+## Uninstall
+
+```bash
+# Stop the broker first
+agent-bridge stop
+
+# Uninstall the package
+npm uninstall -g agent-bridge-cli
+
+# Clean up data and skill (may need manual removal)
+rm -rf ~/.agent-bridge
+rm -rf ~/.claude/skills/bridge
+```
 
 ## Contributing
 
