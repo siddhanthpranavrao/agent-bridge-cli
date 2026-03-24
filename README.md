@@ -18,6 +18,12 @@ npm install -g agent-bridge-cli
 
 # 4. From the frontend, ask the backend a question
 /bridge ask backend "What does the /users endpoint expect?"
+
+# 5. Ask multiple sessions at once
+/bridge ask backend,database "What's the user schema?"
+
+# 6. Or ask all sessions in the group
+/bridge ask --all "How does a request flow end to end?"
 ```
 
 The `--name` flag is optional. If you don't provide it, the name is either:
@@ -99,6 +105,32 @@ Terminal 1:
 /bridge connect project-b --name database
 ```
 
+### Example: Asking multiple sessions at once
+
+You have 3 sessions connected and want to understand a cross-cutting flow:
+
+```
+Terminal 1: claude (in /projects/acme-web)
+  → /bridge connect acme --name frontend
+
+Terminal 2: claude (in /projects/acme-api)
+  → /bridge connect acme --name backend
+
+Terminal 3: claude (in /projects/acme-db)
+  → /bridge connect acme --name database
+
+Terminal 1:
+  → /bridge ask backend,database "What's the user schema end to end?"
+  ✓ From backend: "POST /users expects { email, password }. Validates via Zod..."
+  ✓ From database: "users table: id (uuid), email (unique), password_hash, created_at..."
+
+Terminal 2:
+  → /bridge ask --all "How does authentication work?"
+  ✓ From frontend: "Login form posts to /auth/login, stores JWT in httpOnly cookie..."
+  ✓ From database: "auth_tokens table stores refresh tokens with 30-day expiry..."
+  (backend excluded itself automatically)
+```
+
 ## How it works
 
 A lightweight local broker runs on your machine. Claude Code sessions register with it. When one session needs information from another, the broker either answers from a cached knowledge summary (cheap) or forks the target session to get the answer (more expensive, but only when needed). Summaries get smarter over time as forks fill in knowledge gaps.
@@ -115,6 +147,8 @@ Frontend Session                    Backend Session
      |<───────────┘                        |
      |  "POST { email, password }"         |
 ```
+
+For multi-target queries, all summaries are checked in parallel first (zero cost). Only sessions that can't answer from their summary are forked, minimizing token usage. Summaries persist across disconnect/reconnect cycles and are only regenerated when stale (default: 24 hours).
 
 ## Installation
 
@@ -145,6 +179,7 @@ Run these in your terminal to manage the broker:
 ```bash
 agent-bridge              # Start the broker
 agent-bridge stop         # Stop the broker
+agent-bridge stop --clean # Stop broker and delete all data (~/.agent-bridge/)
 agent-bridge status       # Show broker status (sessions, groups, forks)
 agent-bridge help         # Show help
 ```
@@ -165,23 +200,32 @@ Connect the current Claude Code session to the broker.
 
 Sessions are identified by name (auto-derived from directory, e.g. `/projects/hermes-svc` becomes `hermes-svc`). Names are sanitized to lowercase alphanumeric + hyphens. Duplicate names in the same group get auto-suffixed (`hermes-svc-2`).
 
-### `/bridge ask [target] "question"`
+### `/bridge ask [target(s)] "question"`
 
-Ask another session a question.
+Ask one or more sessions a question.
 
 ```
 /bridge ask backend "What does the /users endpoint expect?"
+/bridge ask backend,database "What's the user schema?"
+/bridge ask backend and database "How does auth work?"
+/bridge ask --all "How does a request flow end to end?"
 /bridge ask "How does authentication work?"    # auto-routes to best session
 ```
 
-**Targeted ask:** Specify which session to query. Supports exact name, session ID, or fuzzy matching (`bakend` finds `backend`).
+**Single target:** Specify which session to query. Supports exact name, session ID, or fuzzy matching (`bakend` finds `backend`).
 
-**Auto-routed ask:** Omit the target and the broker ranks all sessions by keyword relevance and picks the best one.
+**Multi-target:** Comma-separated or "and"-separated targets. Each target is fuzzy-matched independently. Duplicates are automatically deduplicated. Your own session is excluded.
 
-The answer flow is tiered:
-1. Try the session's knowledge summary (fast, no fork cost)
-2. If summary can't answer, fork the session (uses Claude Agent SDK)
-3. Enrich the summary with new knowledge from the fork (future queries are cheaper)
+**Broadcast (`--all`):** Queries every session in the group except yourself. Useful for cross-cutting questions that span multiple codebases.
+
+**Auto-routed:** Omit the target and the broker ranks all sessions by keyword relevance and picks the best one.
+
+The answer flow is optimized with two-phase execution:
+1. **Phase 1:** Check all target summaries in parallel (fast, no fork cost)
+2. **Phase 2:** Fork only sessions whose summaries couldn't answer (parallel, with concurrency limit)
+3. **Phase 3:** Enrich summaries in the background (future queries are cheaper)
+
+For multi-target and broadcast, the response includes per-session answers with source attribution. HTTP status codes indicate success level: **200** (all answered), **207** (some answered, some had issues), **404** (none could answer).
 
 If neither summary nor fork can answer, you get an honest "unable to answer" — never a hallucinated response.
 
@@ -257,6 +301,7 @@ Mistype a command and the broker suggests the closest match:
 - **Runs** as a local HTTP server on a random available port
 - **Auto-shuts down** 30 minutes after the last session disconnects
 - **Crash recovery:** On restart, detects stale PID files, reloads valid sessions, cleans up dead ones and orphaned summaries
+- **Summary persistence:** Summaries survive disconnect/reconnect. Stale summaries (older than 24h by default) are regenerated on the next query. Use `agent-bridge stop --clean` for a full reset
 
 ## API Reference
 
@@ -271,7 +316,7 @@ The broker exposes these HTTP endpoints on `http://127.0.0.1:<port>`:
 | GET | `/sessions?group=<name>` | List sessions in a group |
 | GET | `/sessions/groups` | List all groups |
 | GET | `/sessions/resolve?q=<query>&group=<name>` | Fuzzy-find a session |
-| POST | `/ask` | Ask a question (targeted or auto-routed) |
+| POST | `/ask` | Ask a question (targeted, multi-target, broadcast, or auto-routed) |
 | POST | `/shutdown` | Stop the broker |
 
 All endpoints accept/return JSON. Request validation uses Zod schemas. Error responses include descriptive messages.
@@ -290,6 +335,9 @@ All values have sensible defaults and are configurable:
 | `forkTtlMs` | 15 min | How long to cache a fork for reuse |
 | `maxEntries` | 100 | Max knowledge entries per session summary |
 | `maxEntrySizeChars` | 2000 | Max characters per summary entry |
+| `maxSummaryAgeMs` | 24 hours | Staleness threshold — summaries older than this are regenerated |
+| `maxFanOut` | 5 | Max sessions per multi-target or broadcast query |
+| `maxConcurrentForks` | 5 | Max simultaneous fork operations |
 
 ### Data storage
 
@@ -343,15 +391,18 @@ tests/                    # Mirrors src/ structure
 bun test
 ```
 
-235 tests across 11 files covering:
+278 tests across 11 files covering:
 
 - Broker lifecycle (start, stop, health, idle timeout, crash recovery)
 - Session management (registration, groups, fuzzy resolution, name sanitization)
-- Fork execution (mock forking, TTL cache, timeout handling)
-- Summary engine (generation, keyword matching, enrichment, tiered flow)
+- Fork execution (mock forking, TTL cache, timeout handling, batch forking, concurrency control)
+- Summary engine (generation, keyword matching, enrichment, tiered flow, staleness checks)
 - Auto-routing (session ranking, broadcasting, fallback)
+- Multi-target fan-out (resolution, dedup, fuzzy matching per target, error isolation, 207 Multi-Status)
+- Broadcast mode (self-exclusion, empty group, maxFanOut enforcement)
+- Two-phase execution (summary-only answers, fork gaps only, background enrichment)
 - CLI parsing (subcommand validation, typo correction)
-- Storage (path scoping, traversal protection)
+- Storage (path scoping, traversal protection, deleteAll)
 
 All LLM calls are dependency-injected, so tests run without Claude Code or API access.
 
@@ -367,14 +418,13 @@ All LLM calls are dependency-injected, so tests run without Claude Code or API a
 ## Uninstall
 
 ```bash
-# Stop the broker first
-agent-bridge stop
+# Stop the broker and delete all data
+agent-bridge stop --clean
 
 # Uninstall the package
 npm uninstall -g agent-bridge-cli
 
-# Clean up data and skill (may need manual removal)
-rm -rf ~/.agent-bridge
+# Clean up the skill (may need manual removal)
 rm -rf ~/.claude/skills/bridge
 ```
 
