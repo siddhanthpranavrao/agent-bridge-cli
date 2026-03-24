@@ -25,7 +25,7 @@ Frontend Session                    Backend Session
 
 ```bash
 # 1. Install
-npm install -g agent-bridge
+npm install -g agent-bridge-cli
 
 # 2. Start the broker (runs in background)
 agent-bridge &
@@ -39,12 +39,12 @@ agent-bridge &
 
 ### npm
 ```bash
-npm install -g agent-bridge
+npm install -g agent-bridge-cli
 ```
 
 ### bun
 ```bash
-bun add -g agent-bridge
+bun add -g agent-bridge-cli
 ```
 
 ### From source
