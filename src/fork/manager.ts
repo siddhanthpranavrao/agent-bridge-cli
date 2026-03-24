@@ -1,4 +1,5 @@
 import { query, type SDKMessage } from "@anthropic-ai/claude-agent-sdk";
+import { DEFAULT_MAX_CONCURRENT_FORKS } from "../constants.ts";
 import {
   DEFAULT_FORK_CONFIG,
   type ForkConfig,
@@ -102,6 +103,29 @@ export class ForkManager {
     }
 
     return result;
+  }
+
+  async forkAndAskBatch(
+    requests: { claudeSessionId: string; question: string; cwd?: string }[],
+    maxConcurrent: number = DEFAULT_MAX_CONCURRENT_FORKS
+  ): Promise<Map<string, ForkResult>> {
+    const results = new Map<string, ForkResult>();
+
+    for (let i = 0; i < requests.length; i += maxConcurrent) {
+      const chunk = requests.slice(i, i + maxConcurrent);
+      const settled = await Promise.allSettled(
+        chunk.map(req => this.forkAndAsk(req.claudeSessionId, req.question, req.cwd))
+      );
+
+      for (let j = 0; j < settled.length; j++) {
+        const result = settled[j]!;
+        if (result.status === "fulfilled") {
+          results.set(chunk[j]!.claudeSessionId, result.value);
+        }
+      }
+    }
+
+    return results;
   }
 
   cleanExpired(): number {

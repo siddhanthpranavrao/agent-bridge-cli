@@ -454,7 +454,7 @@ describe("POST /ask - multi-target (targets field)", () => {
       group: "acme",
     });
 
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(207);
     const body = await res.json() as any;
     expect(body.answers.length).toBe(1);
     expect(body.answers[0].source).toBe("frontend");
@@ -575,7 +575,7 @@ describe("POST /ask - multi-target (targets field)", () => {
       }),
     });
 
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(207);
     const body = await res.json() as any;
     expect(body.answers.length).toBe(1);
     expect(body.answers[0].source).toBe("backend");
@@ -601,7 +601,7 @@ describe("POST /ask - multi-target (targets field)", () => {
       group: "acme",
     });
 
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(207);
     const body = await res.json() as any;
     expect(body.answers.length).toBe(1);
     expect(body.answers[0].source).toBe("frontend");
@@ -721,16 +721,335 @@ describe("POST /ask - mutual exclusivity", () => {
   });
 });
 
-describe("POST /ask - broadcast stub", () => {
-  test("broadcast: true returns 501", async () => {
+describe("POST /ask - broadcast", () => {
+  test("broadcast queries all sessions in group", async () => {
     const res = await post("/ask", {
       broadcast: true,
       question: "test question",
       group: "acme",
     });
 
-    expect(res.status).toBe(501);
+    // 200 or 207 depending on whether all sessions succeeded
+    expect(res.status).toBeGreaterThanOrEqual(200);
+    expect(res.status).toBeLessThanOrEqual(207);
     const body = await res.json() as any;
-    expect(body.error).toContain("not yet implemented");
+    expect(body.answers).toBeInstanceOf(Array);
+    expect(body.answers.length).toBe(2);
+  });
+
+  test("broadcast excludes sourceSession", async () => {
+    const res = await post("/ask", {
+      broadcast: true,
+      question: "test question",
+      group: "acme",
+      sourceSession: "s1",
+    });
+
+    expect(res.status).toBeGreaterThanOrEqual(200);
+    expect(res.status).toBeLessThanOrEqual(207);
+    const body = await res.json() as any;
+    expect(body.answers.length).toBe(1);
+    expect(body.answers[0].source).toBe("backend");
+  });
+
+  test("broadcast with empty group returns 404", async () => {
+    const res = await post("/ask", {
+      broadcast: true,
+      question: "test question",
+      group: "empty-group",
+    });
+
+    expect(res.status).toBe(404);
+  });
+
+  test("broadcast with only self returns 404", async () => {
+    // Deregister s2, leaving only s1 which is excluded
+    await post("/sessions/deregister", { sessionId: "s2" });
+
+    const res2 = await post("/ask", {
+      broadcast: true,
+      question: "test question",
+      group: "acme",
+      sourceSession: "s1",
+    });
+
+    expect(res2.status).toBe(404);
+  });
+
+  test("broadcast exceeding maxFanOut returns 400", async () => {
+    // Register 4 more sessions (total 6 with existing 2)
+    for (let i = 3; i <= 8; i++) {
+      await post("/sessions/register", {
+        sessionId: `s${i}`,
+        claudeSessionId: `claude-uuid-${i}`,
+        pid: process.pid,
+        workingDirectory: `/projects/svc-${i}`,
+        group: "acme",
+        name: `service-${i}`,
+      });
+    }
+
+    const res = await post("/ask", {
+      broadcast: true,
+      question: "test question",
+      group: "acme",
+    });
+
+    expect(res.status).toBe(400);
+    const body = await res.json() as any;
+    expect(body.error).toContain("max fan-out");
+  });
+});
+
+describe("POST /ask - two-phase execution", () => {
+  test("answers from summary skip fork", async () => {
+    let forkCallCount = 0;
+    const twoPhaseEntries: import("../../src/summary/types.ts").SummaryEntry[] = [
+      { topic: "users endpoint", content: "POST /users expects { email, password }", addedAt: Date.now() },
+    ];
+    const twoPhaseDeps = {
+      forker: async (): Promise<ForkResult> => {
+        forkCallCount++;
+        return { answer: "fork answer", forkSessionId: "fork-1", durationMs: 100 };
+      },
+      summaryGenerate: async (): Promise<import("../../src/summary/types.ts").SummaryEntry[]> => twoPhaseEntries,
+      summaryQuery: async (entries: any[], _q: string): Promise<string> => {
+        if (entries.length > 0) return entries[0].content;
+        return INSUFFICIENT_CONTEXT;
+      },
+      summaryEnrich: mockSummaryEnrich,
+    };
+
+    const tpBroker = new BrokerServer(storage, undefined, twoPhaseDeps);
+    await tpBroker.start();
+    const tpUrl = `http://127.0.0.1:${tpBroker.getPort()}`;
+
+    await fetch(`${tpUrl}/sessions/register`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: "s1", claudeSessionId: "uuid-1", pid: process.pid,
+        workingDirectory: "/p/a", group: "acme", name: "svc-a",
+      }),
+    });
+    await fetch(`${tpUrl}/sessions/register`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: "s2", claudeSessionId: "uuid-2", pid: process.pid,
+        workingDirectory: "/p/b", group: "acme", name: "svc-b",
+      }),
+    });
+
+    // Both sessions have matching summaries for "users"
+    const res = await fetch(`${tpUrl}/ask`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        targets: ["svc-a", "svc-b"],
+        question: "users endpoint",
+        group: "acme",
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json() as any;
+    expect(body.answers.length).toBe(2);
+    expect(body.answers.every((a: any) => a.fromFork === false)).toBe(true);
+    expect(forkCallCount).toBe(0);
+
+    await tpBroker.stop();
+  });
+
+  test("INSUFFICIENT_CONTEXT triggers fork for that session only", async () => {
+    let forkCallCount = 0;
+    const twoPhaseDeps = {
+      forker: async (): Promise<ForkResult> => {
+        forkCallCount++;
+        return { answer: "forked answer", forkSessionId: "fork-1", durationMs: 100 };
+      },
+      summaryGenerate: async (claudeSessionId: string): Promise<import("../../src/summary/types.ts").SummaryEntry[]> => {
+        if (claudeSessionId === "uuid-1") {
+          return [{ topic: "users endpoint", content: "POST /users", addedAt: Date.now() }];
+        }
+        return []; // uuid-2 has no useful entries
+      },
+      summaryQuery: async (entries: any[], _q: string): Promise<string> => {
+        if (entries.length > 0) return entries[0].content;
+        return INSUFFICIENT_CONTEXT;
+      },
+      summaryEnrich: mockSummaryEnrich,
+    };
+
+    const tpBroker = new BrokerServer(storage, undefined, twoPhaseDeps);
+    await tpBroker.start();
+    const tpUrl = `http://127.0.0.1:${tpBroker.getPort()}`;
+
+    await fetch(`${tpUrl}/sessions/register`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: "s1", claudeSessionId: "uuid-1", pid: process.pid,
+        workingDirectory: "/p/a", group: "acme", name: "svc-a",
+      }),
+    });
+    await fetch(`${tpUrl}/sessions/register`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: "s2", claudeSessionId: "uuid-2", pid: process.pid,
+        workingDirectory: "/p/b", group: "acme", name: "svc-b",
+      }),
+    });
+
+    const res = await fetch(`${tpUrl}/ask`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        targets: ["svc-a", "svc-b"],
+        question: "users endpoint",
+        group: "acme",
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json() as any;
+    expect(body.answers.length).toBe(2);
+
+    const summaryAnswer = body.answers.find((a: any) => a.fromFork === false);
+    const forkAnswer = body.answers.find((a: any) => a.fromFork === true);
+    expect(summaryAnswer).toBeTruthy();
+    expect(forkAnswer).toBeTruthy();
+    expect(forkCallCount).toBe(1);
+
+    await tpBroker.stop();
+  });
+
+  test("enrichment runs after successful fork", async () => {
+    let enrichCallCount = 0;
+    const twoPhaseDeps = {
+      forker: async (): Promise<ForkResult> => ({
+        answer: "forked answer here", forkSessionId: "fork-1", durationMs: 100,
+      }),
+      summaryGenerate: async (): Promise<import("../../src/summary/types.ts").SummaryEntry[]> => [],
+      summaryQuery: async (): Promise<string> => INSUFFICIENT_CONTEXT,
+      summaryEnrich: async (_q: string, _a: string): Promise<import("../../src/summary/types.ts").SummaryEntry> => {
+        enrichCallCount++;
+        return { topic: "enriched", content: "enriched", addedAt: Date.now() };
+      },
+    };
+
+    const tpBroker = new BrokerServer(storage, undefined, twoPhaseDeps);
+    await tpBroker.start();
+    const tpUrl = `http://127.0.0.1:${tpBroker.getPort()}`;
+
+    await fetch(`${tpUrl}/sessions/register`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: "s1", claudeSessionId: "uuid-1", pid: process.pid,
+        workingDirectory: "/p/a", group: "acme", name: "svc-a",
+      }),
+    });
+
+    await fetch(`${tpUrl}/ask`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        targets: ["svc-a"],
+        question: "test",
+        group: "acme",
+      }),
+    });
+
+    // Give background enrichment time to complete
+    await new Promise((r) => setTimeout(r, 50));
+    expect(enrichCallCount).toBe(1);
+
+    await tpBroker.stop();
+  });
+
+  test("all answer from summary, zero forks", async () => {
+    let forkCallCount = 0;
+    const twoPhaseDeps = {
+      forker: async (): Promise<ForkResult> => {
+        forkCallCount++;
+        return { answer: "forked", forkSessionId: "f1", durationMs: 100 };
+      },
+      summaryGenerate: async (): Promise<import("../../src/summary/types.ts").SummaryEntry[]> => [
+        { topic: "users endpoint", content: "POST /users", addedAt: Date.now() },
+      ],
+      summaryQuery: async (entries: any[], _q: string): Promise<string> => {
+        if (entries.length > 0) return entries[0].content;
+        return INSUFFICIENT_CONTEXT;
+      },
+      summaryEnrich: mockSummaryEnrich,
+    };
+
+    const tpBroker = new BrokerServer(storage, undefined, twoPhaseDeps);
+    await tpBroker.start();
+    const tpUrl = `http://127.0.0.1:${tpBroker.getPort()}`;
+
+    await fetch(`${tpUrl}/sessions/register`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: "s1", claudeSessionId: "uuid-1", pid: process.pid,
+        workingDirectory: "/p/a", group: "acme", name: "svc-a",
+      }),
+    });
+    await fetch(`${tpUrl}/sessions/register`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: "s2", claudeSessionId: "uuid-2", pid: process.pid,
+        workingDirectory: "/p/b", group: "acme", name: "svc-b",
+      }),
+    });
+
+    const res = await fetch(`${tpUrl}/ask`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        targets: ["svc-a", "svc-b"],
+        question: "users endpoint",
+        group: "acme",
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json() as any;
+    expect(body.answers.length).toBe(2);
+    expect(forkCallCount).toBe(0);
+
+    await tpBroker.stop();
+  });
+});
+
+describe("POST /ask - 207 Multi-Status", () => {
+  test("returns 207 when some targets have warnings", async () => {
+    const res = await post("/ask", {
+      targets: ["frontend", "nonexistent"],
+      question: "test question",
+      group: "acme",
+    });
+
+    expect(res.status).toBe(207);
+    const body = await res.json() as any;
+    expect(body.answers.length).toBe(1);
+    expect(body.warnings.length).toBeGreaterThanOrEqual(1);
+  });
+
+  test("returns 200 when all targets succeed", async () => {
+    const res = await post("/ask", {
+      targets: ["frontend", "backend"],
+      question: "test question",
+      group: "acme",
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json() as any;
+    expect(body.answers.length).toBe(2);
+    expect(body.warnings.length).toBe(0);
   });
 });

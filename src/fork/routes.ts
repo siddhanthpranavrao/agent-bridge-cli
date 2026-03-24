@@ -134,6 +134,94 @@ async function askSession(
 }
 
 /**
+ * Two-phase parallel execution for multiple sessions.
+ * Phase 1: Query all summaries in parallel (zero LLM cost for keyword matching).
+ * Phase 2: Fork only the gaps in parallel with concurrency limit.
+ * Phase 3: Enrich summaries in background for successful forks.
+ */
+async function executeMultiAsk(
+  sessions: Session[],
+  question: string,
+  summaryEngine: SummaryEngine,
+  forkManager: ForkManager,
+): Promise<AskMultiResponse> {
+  const answers: AskResponse[] = [];
+  const warnings: string[] = [];
+
+  // Phase 1: Query all summaries in parallel
+  const summaryResults = await Promise.allSettled(
+    sessions.map(async (session) => {
+      if (!(await summaryEngine.hasFreshSummary(session.claudeSessionId))) {
+        await summaryEngine.generate(
+          session.claudeSessionId,
+          session.claudeSessionId,
+          session.workingDirectory
+        );
+      }
+      return summaryEngine.query(session.claudeSessionId, question);
+    })
+  );
+
+  const needsFork: Session[] = [];
+  for (let i = 0; i < sessions.length; i++) {
+    const session = sessions[i]!;
+    const result = summaryResults[i]!;
+
+    if (result.status === "rejected") {
+      needsFork.push(session);
+      continue;
+    }
+
+    if (result.value !== INSUFFICIENT_CONTEXT) {
+      answers.push({
+        answer: `[via ${session.name}] ${result.value}`,
+        source: session.name,
+        fromFork: false,
+      });
+    } else {
+      needsFork.push(session);
+    }
+  }
+
+  // Phase 2: Fork only the gaps, in parallel with concurrency limit
+  if (needsFork.length > 0) {
+    const forkResults = await forkManager.forkAndAskBatch(
+      needsFork.map(s => ({
+        claudeSessionId: s.claudeSessionId,
+        question,
+        cwd: s.workingDirectory,
+      }))
+    );
+
+    for (const session of needsFork) {
+      const result = forkResults.get(session.claudeSessionId);
+      if (!result) {
+        warnings.push(`Session "${session.name}" fork failed`);
+        continue;
+      }
+
+      if (result.answer.includes(INSUFFICIENT_CONTEXT)) {
+        answers.push({
+          answer: `[via ${session.name}] Unable to answer this question. The session does not have enough context about this topic.`,
+          source: session.name,
+          fromFork: true,
+        });
+      } else {
+        answers.push({
+          answer: `[via ${session.name}] ${result.answer}`,
+          source: session.name,
+          fromFork: true,
+        });
+        // Phase 3: Enrich summary in background
+        summaryEngine.enrich(session.claudeSessionId, question, result.answer).catch(() => {});
+      }
+    }
+  }
+
+  return { answers, warnings };
+}
+
+/**
  * Auto-route: find the best session to answer the question.
  */
 async function autoRoute(
@@ -238,22 +326,15 @@ async function askMultiple(
     };
   }
 
-  const answers: AskResponse[] = [];
-  for (const session of sessions) {
-    try {
-      const answer = await askSession(session, question, summaryEngine, forkManager);
-      answers.push(answer);
-    } catch (err) {
-      const errMsg = err instanceof Error ? err.message : String(err);
-      warnings.push(`Session "${session.name}" failed: ${errMsg}`);
-    }
+  const result = await executeMultiAsk(sessions, question, summaryEngine, forkManager);
+  result.warnings = [...warnings, ...result.warnings];
+
+  if (result.answers.length === 0) {
+    return { response: result, status: 404 };
   }
 
-  if (answers.length === 0 && warnings.length > 0) {
-    return { response: { answers, warnings }, status: 404 };
-  }
-
-  return { response: { answers, warnings }, status: 200 };
+  const hasFailures = result.warnings.length > 0;
+  return { response: result, status: hasFailures ? 207 : 200 };
 }
 
 export async function handleAskRoute(
@@ -275,11 +356,42 @@ export async function handleAskRoute(
 
     const parsed = AskRequestSchema.parse(body);
 
-    // Path D: Broadcast stub (issue #13 implements this)
+    // Path D: Broadcast — query all sessions in the group
     if (parsed.broadcast === true) {
-      return sendJson(res, 501, {
-        error: "Broadcast is not yet implemented. Use targets array for multi-session queries.",
+      const allSessions = sessionManager.listByGroup(parsed.group);
+      const aliveSessions = allSessions.filter(s => {
+        if (parsed.sourceSession && s.sessionId === parsed.sourceSession) return false;
+        return sessionManager.validateAlive(s.sessionId);
       });
+
+      if (aliveSessions.length === 0) {
+        return sendJson(res, 404, {
+          error: `No active sessions in group "${parsed.group}" (excluding self)`,
+        });
+      }
+
+      if (aliveSessions.length > DEFAULT_MAX_FAN_OUT) {
+        return sendJson(res, 400, {
+          error: `Group "${parsed.group}" has ${aliveSessions.length} sessions but max fan-out is ${DEFAULT_MAX_FAN_OUT}. Use targets for specific sessions.`,
+        });
+      }
+
+      const broadcastResult = await executeMultiAsk(
+        aliveSessions,
+        parsed.question,
+        summaryEngine,
+        forkManager
+      );
+
+      if (broadcastResult.answers.length === 0) {
+        return sendJson(res, 404, {
+          error: "No session in the group could answer",
+          ...broadcastResult,
+        });
+      }
+
+      const broadcastStatus = broadcastResult.warnings.length > 0 ? 207 : 200;
+      return sendJson(res, broadcastStatus, broadcastResult);
     }
 
     // Path C: Multi-target fan-out
@@ -308,7 +420,7 @@ export async function handleAskRoute(
         });
       }
 
-      return sendJson(res, 200, response);
+      return sendJson(res, status, response);
     }
 
     // Path B: Auto-routing (no targeting specified)

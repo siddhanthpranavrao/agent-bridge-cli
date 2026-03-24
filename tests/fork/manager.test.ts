@@ -216,3 +216,100 @@ describe("ForkManager - fork TTL cache", () => {
     expect(manager.getActiveForkCount()).toBe(0);
   });
 });
+
+describe("ForkManager - forkAndAskBatch", () => {
+  test("returns results for all successful requests", async () => {
+    const mockForker = async (sessionId: string): Promise<ForkResult> => ({
+      answer: `answer-${sessionId}`,
+      forkSessionId: `fork-${sessionId}`,
+      durationMs: 50,
+    });
+
+    const manager = createManager(mockForker);
+    const results = await manager.forkAndAskBatch([
+      { claudeSessionId: "session-a", question: "q1" },
+      { claudeSessionId: "session-b", question: "q2" },
+    ]);
+
+    expect(results.size).toBe(2);
+    expect(results.get("session-a")!.answer).toBe("answer-session-a");
+    expect(results.get("session-b")!.answer).toBe("answer-session-b");
+  });
+
+  test("handles mixed success/failure", async () => {
+    const mockForker = async (sessionId: string): Promise<ForkResult> => {
+      if (sessionId === "session-fail") throw new Error("fork crashed");
+      return { answer: "ok", forkSessionId: "fork-ok", durationMs: 50 };
+    };
+
+    const manager = createManager(mockForker);
+    const results = await manager.forkAndAskBatch([
+      { claudeSessionId: "session-ok", question: "q1" },
+      { claudeSessionId: "session-fail", question: "q2" },
+    ]);
+
+    expect(results.size).toBe(1);
+    expect(results.has("session-ok")).toBe(true);
+    expect(results.has("session-fail")).toBe(false);
+  });
+
+  test("respects concurrency limit", async () => {
+    let maxInFlight = 0;
+    let currentInFlight = 0;
+
+    const mockForker = async (sessionId: string): Promise<ForkResult> => {
+      currentInFlight++;
+      maxInFlight = Math.max(maxInFlight, currentInFlight);
+      await new Promise((r) => setTimeout(r, 30));
+      currentInFlight--;
+      return { answer: "ok", forkSessionId: `fork-${sessionId}`, durationMs: 30 };
+    };
+
+    const manager = createManager(mockForker);
+    const results = await manager.forkAndAskBatch(
+      [
+        { claudeSessionId: "s1", question: "q" },
+        { claudeSessionId: "s2", question: "q" },
+        { claudeSessionId: "s3", question: "q" },
+        { claudeSessionId: "s4", question: "q" },
+      ],
+      2 // maxConcurrent = 2
+    );
+
+    expect(results.size).toBe(4);
+    expect(maxInFlight).toBeLessThanOrEqual(2);
+  });
+
+  test("returns empty map for empty requests", async () => {
+    const mockForker = async (): Promise<ForkResult> => ({
+      answer: "ok", forkSessionId: "fork-1", durationMs: 50,
+    });
+
+    const manager = createManager(mockForker);
+    const results = await manager.forkAndAskBatch([]);
+
+    expect(results.size).toBe(0);
+  });
+
+  test("reuses fork cache across batch", async () => {
+    const sessionIds: string[] = [];
+    const mockForker = async (sessionId: string): Promise<ForkResult> => {
+      sessionIds.push(sessionId);
+      return { answer: "ok", forkSessionId: `fork-${sessionId}`, durationMs: 50 };
+    };
+
+    const manager = createManager(mockForker);
+
+    // First call caches the fork
+    await manager.forkAndAsk("original-session", "q1");
+
+    // Batch call should reuse cached fork
+    await manager.forkAndAskBatch([
+      { claudeSessionId: "original-session", question: "q2" },
+    ]);
+
+    // First call: "original-session", second call should use cached "fork-original-session"
+    expect(sessionIds[0]).toBe("original-session");
+    expect(sessionIds[1]).toBe("fork-original-session");
+  });
+});
