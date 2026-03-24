@@ -47,25 +47,24 @@ Then use `curl` to call the broker's HTTP API at `http://127.0.0.1:$BRIDGE_PORT`
 
 ### connect [group] [--name name]
 
-Register this session with the broker. You need to determine:
-- **sessionId**: Generate a UUID for this session (use `uuidgen` or similar)
-- **claudeSessionId**: This Claude Code session's ID
-- **pid**: The Claude Code process PID — get it with: `ps -o ppid= -p $$ | tr -d ' '`
-- **workingDirectory**: The current working directory (`pwd`)
-- **group**: From the argument (default: "default")
-- **name**: From `--name` flag, or omit to auto-derive from directory name
+Register this session with the broker. Run this single command to gather all required info and register:
 
 ```bash
 BRIDGE_PORT=$(cat ~/.agent-bridge/broker.port)
 CLAUDE_PID=$(ps -o ppid= -p $$ | tr -d ' ')
 SESSION_ID=$(uuidgen)
+CWD_ENCODED=$(pwd | sed 's|/|-|g')
+CLAUDE_SESSION_ID=$(ls -t ~/.claude/projects/${CWD_ENCODED}/*.jsonl 2>/dev/null | head -1 | xargs basename 2>/dev/null | sed 's/.jsonl//')
 
 curl -s -X POST http://127.0.0.1:$BRIDGE_PORT/sessions/register \
   -H 'Content-Type: application/json' \
-  -d "{\"sessionId\":\"$SESSION_ID\",\"claudeSessionId\":\"<claude-session-id>\",\"pid\":$CLAUDE_PID,\"workingDirectory\":\"$(pwd)\",\"group\":\"<group>\",\"name\":\"<name>\"}"
+  -d "{\"sessionId\":\"$SESSION_ID\",\"claudeSessionId\":\"$CLAUDE_SESSION_ID\",\"pid\":$CLAUDE_PID,\"workingDirectory\":\"$(pwd)\",\"group\":\"<group>\",\"name\":\"<name>\"}"
 ```
 
-Remember the sessionId for disconnect later.
+Replace `<group>` with the group name from the user's argument (default: "default").
+Replace `<name>` with the `--name` value if provided, or omit the name field to auto-derive from directory.
+
+Remember the SESSION_ID value for disconnect later.
 
 ### disconnect
 
