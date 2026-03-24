@@ -40,10 +40,10 @@ async function askSession(
   forkManager: ForkManager,
   hint?: string
 ): Promise<AskResponse> {
-  // Generate summary if it doesn't exist
-  if (!(await summaryEngine.hasSummary(targetSession.sessionId))) {
+  // Generate summary if it doesn't exist (keyed by claudeSessionId for reuse across reconnects)
+  if (!(await summaryEngine.hasSummary(targetSession.claudeSessionId))) {
     await summaryEngine.generate(
-      targetSession.sessionId,
+      targetSession.claudeSessionId,
       targetSession.claudeSessionId,
       targetSession.workingDirectory
     );
@@ -51,7 +51,7 @@ async function askSession(
 
   // Try to answer from summary
   const summaryAnswer = await summaryEngine.query(
-    targetSession.sessionId,
+    targetSession.claudeSessionId,
     question
   );
 
@@ -82,7 +82,7 @@ async function askSession(
 
   // Enrich summary in background
   summaryEngine
-    .enrich(targetSession.sessionId, question, result.answer)
+    .enrich(targetSession.claudeSessionId, question, result.answer)
     .catch(() => {});
 
   const suffix = hint ? ` ${hint}` : "";
@@ -139,11 +139,11 @@ async function autoRoute(
 
   // Broadcasting fallback: try each session's summary
   for (const session of aliveSessions) {
-    if (!(await summaryEngine.hasSummary(session.sessionId))) {
-      await summaryEngine.generate(session.sessionId, session.claudeSessionId, session.workingDirectory);
+    if (!(await summaryEngine.hasSummary(session.claudeSessionId))) {
+      await summaryEngine.generate(session.claudeSessionId, session.claudeSessionId, session.workingDirectory);
     }
 
-    const answer = await summaryEngine.query(session.sessionId, question);
+    const answer = await summaryEngine.query(session.claudeSessionId, question);
     if (answer !== INSUFFICIENT_CONTEXT) {
       return {
         response: {

@@ -44,8 +44,8 @@ export class BrokerServer {
     );
 
     // Wire up summary cleanup on session deregister
-    this.sessionManager.onDeregister((sessionId) => {
-      this.summaryEngine.delete(sessionId).catch(() => {});
+    this.sessionManager.onDeregister((_sessionId, claudeSessionId) => {
+      this.summaryEngine.delete(claudeSessionId).catch(() => {});
     });
 
     // Wire up reference counting

@@ -173,8 +173,8 @@ describe("Crash recovery - orphaned summaries", () => {
       connectedAt: Date.now(),
     }];
     await storage.write("groups/acme/sessions.json", JSON.stringify(sessions));
-    await storage.write("summaries/s1.json", JSON.stringify({
-      sessionId: "s1",
+    await storage.write("summaries/uuid-1.json", JSON.stringify({
+      sessionId: "uuid-1",
       generatedAt: Date.now(),
       entries: [{ topic: "test", content: "test", addedAt: Date.now() }],
     }));
@@ -182,7 +182,7 @@ describe("Crash recovery - orphaned summaries", () => {
 
     const result = await recoverFromCrash(storage, sessionManager, summaryEngine);
     expect(result.summariesCleaned).toBe(0);
-    expect(await storage.exists("summaries/s1.json")).toBe(true);
+    expect(await storage.exists("summaries/uuid-1.json")).toBe(true);
   });
 });
 
@@ -212,11 +212,11 @@ describe("Crash recovery - full integration", () => {
       },
     ];
     await storage.write("groups/acme/sessions.json", JSON.stringify(sessions));
-    await storage.write("summaries/alive.json", JSON.stringify({
-      sessionId: "alive", generatedAt: Date.now(), entries: [],
+    await storage.write("summaries/uuid-alive.json", JSON.stringify({
+      sessionId: "uuid-alive", generatedAt: Date.now(), entries: [],
     }));
-    await storage.write("summaries/dead.json", JSON.stringify({
-      sessionId: "dead", generatedAt: Date.now(), entries: [],
+    await storage.write("summaries/uuid-dead.json", JSON.stringify({
+      sessionId: "uuid-dead", generatedAt: Date.now(), entries: [],
     }));
     await storage.write("broker.pid", "99999998");
     await storage.write("broker.port", "12345");
@@ -231,8 +231,8 @@ describe("Crash recovery - full integration", () => {
     // Verify state
     expect(sessionManager.getSessionCount()).toBe(1);
     expect(sessionManager.getSession("alive")).not.toBeNull();
-    expect(await storage.exists("summaries/alive.json")).toBe(true);
-    expect(await storage.exists("summaries/dead.json")).toBe(false);
+    expect(await storage.exists("summaries/uuid-alive.json")).toBe(true);
+    expect(await storage.exists("summaries/uuid-dead.json")).toBe(false);
     expect(await storage.exists("broker.pid")).toBe(false);
     expect(await storage.exists("broker.port")).toBe(false);
   });

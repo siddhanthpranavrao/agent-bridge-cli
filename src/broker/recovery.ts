@@ -81,11 +81,20 @@ async function cleanOrphanedSummaries(
   for (const file of summaryFiles) {
     if (!file.endsWith(".json")) continue;
 
-    const sessionId = file.replace(".json", "");
-    const session = sessionManager.getSession(sessionId);
+    const claudeSessionId = file.replace(".json", "");
+    // Check if any registered session has this claudeSessionId
+    const allGroups = sessionManager.listAllGroups();
+    let found = false;
+    for (const group of allGroups) {
+      const sessions = sessionManager.listByGroup(group);
+      if (sessions.some((s) => s.claudeSessionId === claudeSessionId)) {
+        found = true;
+        break;
+      }
+    }
 
-    if (!session) {
-      await summaryEngine.delete(sessionId);
+    if (!found) {
+      await summaryEngine.delete(claudeSessionId);
       cleaned++;
     }
   }

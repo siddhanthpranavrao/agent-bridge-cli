@@ -22,7 +22,7 @@ export class SessionManager {
   private readonly sessions: Map<string, Session> = new Map();
   private readonly groupIndex: Map<string, Set<string>> = new Map();
   private readonly onRegisterCallbacks: ((sessionId: string) => void)[] = [];
-  private readonly onDeregisterCallbacks: ((sessionId: string) => void)[] = [];
+  private readonly onDeregisterCallbacks: ((sessionId: string, claudeSessionId: string) => void)[] = [];
 
   constructor(storage: Storage) {
     this.storage = storage;
@@ -75,7 +75,7 @@ export class SessionManager {
     this.sessions.delete(sessionId);
 
     for (const cb of this.onDeregisterCallbacks) {
-      try { cb(sessionId); } catch { /* don't let callback errors break deregistration */ }
+      try { cb(sessionId, session.claudeSessionId); } catch { /* don't let callback errors break deregistration */ }
     }
 
     const groupSessions = this.groupIndex.get(group);
@@ -171,7 +171,7 @@ export class SessionManager {
     this.onRegisterCallbacks.push(callback);
   }
 
-  onDeregister(callback: (sessionId: string) => void): void {
+  onDeregister(callback: (sessionId: string, claudeSessionId: string) => void): void {
     this.onDeregisterCallbacks.push(callback);
   }
 
