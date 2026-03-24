@@ -113,7 +113,7 @@ async function askSession(
     question
   );
 
-  if (summaryAnswer !== INSUFFICIENT_CONTEXT) {
+  if (!summaryAnswer.includes(INSUFFICIENT_CONTEXT)) {
     const suffix = hint ? ` ${hint}` : "";
     return {
       answer: `[via ${targetSession.name}] ${summaryAnswer}${suffix}`,
@@ -190,7 +190,7 @@ async function executeMultiAsk(
       continue;
     }
 
-    if (result.value !== INSUFFICIENT_CONTEXT) {
+    if (!result.value.includes(INSUFFICIENT_CONTEXT)) {
       answers.push({
         answer: `[via ${session.name}] ${result.value}`,
         source: session.name,
@@ -310,7 +310,7 @@ async function executeQueries(
         for (const question of questions) {
           try {
             const answer = await summaryEngine.query(session.claudeSessionId, question);
-            if (answer !== INSUFFICIENT_CONTEXT) {
+            if (!answer.includes(INSUFFICIENT_CONTEXT)) {
               answers.push({
                 answer: `[via ${session.name}] ${answer}`,
                 source: session.name,
@@ -441,7 +441,7 @@ async function autoRoute(
     }
 
     const answer = await summaryEngine.query(session.claudeSessionId, question);
-    if (answer !== INSUFFICIENT_CONTEXT) {
+    if (!answer.includes(INSUFFICIENT_CONTEXT)) {
       return {
         response: {
           answer: `[via ${session.name}] ${answer} ${hint}`,
