@@ -1,4 +1,4 @@
-# agent-bridge
+# agent-bridge-cli
 
 Let multiple Claude Code instances communicate without polluting each other's context.
 
