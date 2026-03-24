@@ -1463,3 +1463,142 @@ describe("POST /ask - queries schema validation", () => {
     expect(res.status).toBe(400);
   });
 });
+
+describe("POST /ask - per-question enrichment", () => {
+  test("enriches per-question from batched fork with labeled answers", async () => {
+    const enrichCalls: { question: string; answer: string }[] = [];
+    const eDeps = {
+      ...mockDeps,
+      forker: async (): Promise<ForkResult> => ({
+        answer: "1. The API uses REST with JSON.\n2. Auth uses JWT tokens with 24h expiry.",
+        forkSessionId: "f1",
+        durationMs: 100,
+      }),
+      summaryEnrich: async (question: string, answer: string): Promise<SummaryEntry> => {
+        enrichCalls.push({ question, answer });
+        return { topic: question, content: answer, addedAt: Date.now() };
+      },
+    };
+
+    const eBroker = new BrokerServer(storage, undefined, eDeps);
+    await eBroker.start();
+    const eUrl = `http://127.0.0.1:${eBroker.getPort()}`;
+
+    await fetch(`${eUrl}/sessions/register`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sessionId: "s1", claudeSessionId: "uuid-1", pid: process.pid, workingDirectory: "/p/a", group: "acme", name: "backend" }),
+    });
+
+    await fetch(`${eUrl}/ask`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        queries: [
+          { question: "What is the API?", targets: ["backend"] },
+          { question: "How does auth work?", targets: ["backend"] },
+        ],
+        group: "acme",
+      }),
+    });
+
+    await new Promise((r) => setTimeout(r, 50));
+
+    // Each question should get its own segment, not the full combined answer
+    expect(enrichCalls.length).toBe(2);
+    const apiCall = enrichCalls.find(c => c.question === "What is the API?");
+    const authCall = enrichCalls.find(c => c.question === "How does auth work?");
+    expect(apiCall).toBeTruthy();
+    expect(authCall).toBeTruthy();
+    expect(apiCall!.answer).toContain("REST");
+    expect(apiCall!.answer).not.toContain("JWT");
+    expect(authCall!.answer).toContain("JWT");
+    expect(authCall!.answer).not.toContain("REST");
+
+    await eBroker.stop();
+  });
+
+  test("falls back to full answer when fork doesn't label", async () => {
+    const enrichCalls: { question: string; answer: string }[] = [];
+    const eDeps = {
+      ...mockDeps,
+      forker: async (): Promise<ForkResult> => ({
+        answer: "Here is everything about both the API and auth in one paragraph.",
+        forkSessionId: "f1",
+        durationMs: 100,
+      }),
+      summaryEnrich: async (question: string, answer: string): Promise<SummaryEntry> => {
+        enrichCalls.push({ question, answer });
+        return { topic: question, content: answer, addedAt: Date.now() };
+      },
+    };
+
+    const eBroker = new BrokerServer(storage, undefined, eDeps);
+    await eBroker.start();
+    const eUrl = `http://127.0.0.1:${eBroker.getPort()}`;
+
+    await fetch(`${eUrl}/sessions/register`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sessionId: "s1", claudeSessionId: "uuid-1", pid: process.pid, workingDirectory: "/p/a", group: "acme", name: "backend" }),
+    });
+
+    await fetch(`${eUrl}/ask`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        queries: [
+          { question: "What is the API?", targets: ["backend"] },
+          { question: "How does auth work?", targets: ["backend"] },
+        ],
+        group: "acme",
+      }),
+    });
+
+    await new Promise((r) => setTimeout(r, 50));
+
+    // Both should get the full answer as fallback
+    expect(enrichCalls.length).toBe(2);
+    expect(enrichCalls[0]!.answer).toBe("Here is everything about both the API and auth in one paragraph.");
+    expect(enrichCalls[1]!.answer).toBe("Here is everything about both the API and auth in one paragraph.");
+
+    await eBroker.stop();
+  });
+
+  test("single question fork enriches normally without parsing", async () => {
+    const enrichCalls: { question: string; answer: string }[] = [];
+    const eDeps = {
+      ...mockDeps,
+      forker: async (): Promise<ForkResult> => ({
+        answer: "The API uses REST with JSON responses.",
+        forkSessionId: "f1",
+        durationMs: 100,
+      }),
+      summaryEnrich: async (question: string, answer: string): Promise<SummaryEntry> => {
+        enrichCalls.push({ question, answer });
+        return { topic: question, content: answer, addedAt: Date.now() };
+      },
+    };
+
+    const eBroker = new BrokerServer(storage, undefined, eDeps);
+    await eBroker.start();
+    const eUrl = `http://127.0.0.1:${eBroker.getPort()}`;
+
+    await fetch(`${eUrl}/sessions/register`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sessionId: "s1", claudeSessionId: "uuid-1", pid: process.pid, workingDirectory: "/p/a", group: "acme", name: "backend" }),
+    });
+
+    await fetch(`${eUrl}/ask`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        queries: [{ question: "What is the API?", targets: ["backend"] }],
+        group: "acme",
+      }),
+    });
+
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(enrichCalls.length).toBe(1);
+    expect(enrichCalls[0]!.question).toBe("What is the API?");
+    expect(enrichCalls[0]!.answer).toBe("The API uses REST with JSON responses.");
+
+    await eBroker.stop();
+  });
+});

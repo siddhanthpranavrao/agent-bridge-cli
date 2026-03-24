@@ -29,6 +29,24 @@ function parseJsonBody(body: string): unknown {
   }
 }
 
+function parseBatchedForkAnswer(
+  answer: string,
+  questionCount: number
+): string[] | null {
+  if (questionCount <= 1) return null;
+  const segments: string[] = [];
+  for (let i = 1; i <= questionCount; i++) {
+    const label = `${i}.`;
+    const start = answer.indexOf(label);
+    if (start === -1) return null;
+    const nextLabel = i < questionCount ? `${i + 1}.` : null;
+    const end = nextLabel ? answer.indexOf(nextLabel) : answer.length;
+    if (end === -1) return null;
+    segments.push(answer.slice(start + label.length, end).trim());
+  }
+  return segments.length === questionCount ? segments : null;
+}
+
 interface ResolvedTargets {
   sessions: Session[];
   warnings: string[];
@@ -350,9 +368,15 @@ async function executeQueries(
           source: session.name,
           fromFork: true,
         });
-        // Enrich per-question (issue #17 will improve parsing)
-        for (const q of unansweredQuestions) {
-          summaryEngine.enrich(session.claudeSessionId, q, result.answer).catch(() => {});
+        // Enrich per-question with parsed segments
+        if (unansweredQuestions.length === 1) {
+          summaryEngine.enrich(session.claudeSessionId, unansweredQuestions[0]!, result.answer).catch(() => {});
+        } else {
+          const segments = parseBatchedForkAnswer(result.answer, unansweredQuestions.length);
+          for (let i = 0; i < unansweredQuestions.length; i++) {
+            const segmentAnswer = segments ? segments[i]! : result.answer;
+            summaryEngine.enrich(session.claudeSessionId, unansweredQuestions[i]!, segmentAnswer).catch(() => {});
+          }
         }
       }
     }
