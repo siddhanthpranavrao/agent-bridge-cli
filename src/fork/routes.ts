@@ -1,7 +1,9 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { INSUFFICIENT_CONTEXT } from "../constants.ts";
 import { AskRequestSchema, type AskResponse } from "./types.ts";
 import type { ForkManager } from "./manager.ts";
 import type { SessionManager } from "../sessions/manager.ts";
+import type { SummaryEngine } from "../summary/engine.ts";
 import { ZodError } from "zod";
 
 function sendJson(res: ServerResponse, status: number, data: unknown): void {
@@ -30,7 +32,8 @@ export async function handleAskRoute(
   req: IncomingMessage,
   res: ServerResponse,
   sessionManager: SessionManager,
-  forkManager: ForkManager
+  forkManager: ForkManager,
+  summaryEngine: SummaryEngine
 ): Promise<void> {
   if (req.method !== "POST") {
     return sendJson(res, 405, { error: "Method not allowed" });
@@ -62,19 +65,56 @@ export async function handleAskRoute(
       });
     }
 
-    // Fork and ask
+    // Step 1: Generate summary if it doesn't exist
+    if (!(await summaryEngine.hasSummary(targetSession.sessionId))) {
+      await summaryEngine.generate(
+        targetSession.sessionId,
+        targetSession.claudeSessionId
+      );
+    }
+
+    // Step 2: Try to answer from summary
+    const summaryAnswer = await summaryEngine.query(
+      targetSession.sessionId,
+      parsed.question
+    );
+
+    if (summaryAnswer !== INSUFFICIENT_CONTEXT) {
+      const response: AskResponse = {
+        answer: `[via ${targetSession.name}] ${summaryAnswer}`,
+        source: targetSession.name,
+        fromFork: false,
+      };
+      return sendJson(res, 200, response);
+    }
+
+    // Step 3: Fork and ask (summary couldn't answer)
     const result = await forkManager.forkAndAsk(
       targetSession.claudeSessionId,
       parsed.question
     );
 
-    // Build response
+    // Step 4: Check if fork also couldn't answer
+    if (result.answer.includes(INSUFFICIENT_CONTEXT)) {
+      const response: AskResponse = {
+        answer: `[via ${targetSession.name}] Unable to answer this question. The session does not have enough context about this topic.`,
+        source: targetSession.name,
+        fromFork: true,
+      };
+      return sendJson(res, 200, response);
+    }
+
+    // Step 5: Enrich summary with new knowledge (background, don't block response)
+    summaryEngine
+      .enrich(targetSession.sessionId, parsed.question, result.answer)
+      .catch(() => {});
+
+    // Step 6: Return fork answer
     const response: AskResponse = {
       answer: `[via ${targetSession.name}] ${result.answer}`,
       source: targetSession.name,
       fromFork: true,
     };
-
     return sendJson(res, 200, response);
   } catch (err) {
     if (err instanceof ZodError) {

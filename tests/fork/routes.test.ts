@@ -2,9 +2,11 @@ import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { INSUFFICIENT_CONTEXT } from "../../src/constants.ts";
 import { Storage } from "../../src/storage/storage.ts";
 import { BrokerServer } from "../../src/broker/server.ts";
 import type { ForkResult, ForkConfig } from "../../src/fork/types.ts";
+import type { SummaryEntry } from "../../src/summary/types.ts";
 
 let testDir: string;
 let storage: Storage;
@@ -21,10 +23,27 @@ const mockForker = async (
   durationMs: 150,
 });
 
+// Summary mocks: generate returns empty (so summary query returns INSUFFICIENT_CONTEXT),
+// which forces fallback to fork — preserving existing fork test behavior
+const mockSummaryGenerate = async (): Promise<SummaryEntry[]> => [];
+const mockSummaryQuery = async (): Promise<string> => INSUFFICIENT_CONTEXT;
+const mockSummaryEnrich = async (_q: string, _a: string): Promise<SummaryEntry> => ({
+  topic: "mock",
+  content: "mock",
+  addedAt: Date.now(),
+});
+
+const mockDeps = {
+  forker: mockForker,
+  summaryGenerate: mockSummaryGenerate,
+  summaryQuery: mockSummaryQuery,
+  summaryEnrich: mockSummaryEnrich,
+};
+
 beforeEach(async () => {
   testDir = await mkdtemp(join(tmpdir(), "agent-bridge-fork-routes-test-"));
   storage = new Storage({ baseDir: testDir });
-  broker = new BrokerServer(storage, undefined, mockForker);
+  broker = new BrokerServer(storage, undefined, mockDeps);
   await broker.start();
   baseUrl = `http://127.0.0.1:${broker.getPort()}`;
 
@@ -191,7 +210,7 @@ describe("POST /ask - fork errors", () => {
       throw err;
     };
 
-    const timeoutBroker = new BrokerServer(storage, undefined, timeoutForker);
+    const timeoutBroker = new BrokerServer(storage, undefined, { ...mockDeps, forker: timeoutForker });
     await timeoutBroker.start();
     const timeoutUrl = `http://127.0.0.1:${timeoutBroker.getPort()}`;
 
@@ -231,7 +250,7 @@ describe("POST /ask - fork errors", () => {
       throw new Error("Fork process crashed");
     };
 
-    const failBroker = new BrokerServer(storage, undefined, failForker);
+    const failBroker = new BrokerServer(storage, undefined, { ...mockDeps, forker: failForker });
     await failBroker.start();
     const failUrl = `http://127.0.0.1:${failBroker.getPort()}`;
 

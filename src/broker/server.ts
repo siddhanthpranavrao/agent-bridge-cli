@@ -6,23 +6,44 @@ import { handleSessionRoutes } from "../sessions/routes.ts";
 import { ForkManager } from "../fork/manager.ts";
 import { handleAskRoute } from "../fork/routes.ts";
 import type { ForkerFn } from "../fork/types.ts";
+import { SummaryEngine } from "../summary/engine.ts";
+import type { GenerateFn, QueryFn, EnrichFn } from "../summary/types.ts";
 import { DEFAULT_BROKER_CONFIG, type BrokerConfig, type BrokerStatus } from "./types.ts";
+
+export interface BrokerDeps {
+  forker?: ForkerFn;
+  summaryGenerate?: GenerateFn;
+  summaryQuery?: QueryFn;
+  summaryEnrich?: EnrichFn;
+}
 
 export class BrokerServer {
   private readonly storage: Storage;
   private readonly config: BrokerConfig;
   private readonly sessionManager: SessionManager;
   private readonly forkManager: ForkManager;
+  private readonly summaryEngine: SummaryEngine;
   private server: Server | null = null;
   private startedAt: number = 0;
   private assignedPort: number = 0;
   private stopping: boolean = false;
 
-  constructor(storage: Storage, config?: Partial<BrokerConfig>, forker?: ForkerFn) {
+  constructor(storage: Storage, config?: Partial<BrokerConfig>, deps?: BrokerDeps) {
     this.storage = storage;
     this.config = { ...DEFAULT_BROKER_CONFIG, ...config };
     this.sessionManager = new SessionManager(storage);
-    this.forkManager = new ForkManager(forker);
+    this.forkManager = new ForkManager(deps?.forker);
+    this.summaryEngine = new SummaryEngine(
+      storage,
+      deps?.summaryGenerate,
+      deps?.summaryQuery,
+      deps?.summaryEnrich
+    );
+
+    // Wire up summary cleanup on session deregister
+    this.sessionManager.onDeregister((sessionId) => {
+      this.summaryEngine.delete(sessionId).catch(() => {});
+    });
   }
 
   async start(): Promise<void> {
@@ -94,6 +115,10 @@ export class BrokerServer {
     return this.forkManager;
   }
 
+  getSummaryEngine(): SummaryEngine {
+    return this.summaryEngine;
+  }
+
   private handleRequest(req: IncomingMessage, res: ServerResponse): void {
     const url = new URL(req.url ?? "/", `http://${req.headers.host}`);
     const path = url.pathname;
@@ -114,7 +139,7 @@ export class BrokerServer {
 
     // Ask route
     if (path === "/ask") {
-      handleAskRoute(req, res, this.sessionManager, this.forkManager);
+      handleAskRoute(req, res, this.sessionManager, this.forkManager, this.summaryEngine);
       return;
     }
 
