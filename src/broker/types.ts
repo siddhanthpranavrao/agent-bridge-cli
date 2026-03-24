@@ -11,6 +11,7 @@ export interface BrokerStatus {
   host: string;
   uptime: number;
   status: "ok" | "stopping";
+  sessions: number;
 }
 
 export const DEFAULT_BROKER_CONFIG: BrokerConfig = {

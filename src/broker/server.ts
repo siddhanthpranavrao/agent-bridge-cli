@@ -1,11 +1,14 @@
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from "node:http";
 import { BROKER_PID_FILE, BROKER_PORT_FILE } from "../constants.ts";
 import type { Storage } from "../storage/storage.ts";
+import { SessionManager } from "../sessions/manager.ts";
+import { handleSessionRoutes } from "../sessions/routes.ts";
 import { DEFAULT_BROKER_CONFIG, type BrokerConfig, type BrokerStatus } from "./types.ts";
 
 export class BrokerServer {
   private readonly storage: Storage;
   private readonly config: BrokerConfig;
+  private readonly sessionManager: SessionManager;
   private server: Server | null = null;
   private startedAt: number = 0;
   private assignedPort: number = 0;
@@ -14,6 +17,7 @@ export class BrokerServer {
   constructor(storage: Storage, config?: Partial<BrokerConfig>) {
     this.storage = storage;
     this.config = { ...DEFAULT_BROKER_CONFIG, ...config };
+    this.sessionManager = new SessionManager(storage);
   }
 
   async start(): Promise<void> {
@@ -69,6 +73,7 @@ export class BrokerServer {
       host: this.config.host,
       uptime: this.startedAt > 0 ? Math.floor((Date.now() - this.startedAt) / 1000) : 0,
       status: this.stopping ? "stopping" : "ok",
+      sessions: this.sessionManager.getSessionCount(),
     };
   }
 
@@ -76,14 +81,29 @@ export class BrokerServer {
     return this.assignedPort;
   }
 
+  getSessionManager(): SessionManager {
+    return this.sessionManager;
+  }
+
   private handleRequest(req: IncomingMessage, res: ServerResponse): void {
-    if (req.method === "GET" && req.url === "/health") {
+    const url = new URL(req.url ?? "/", `http://${req.headers.host}`);
+    const path = url.pathname;
+
+    // Health endpoint
+    if (req.method === "GET" && path === "/health") {
       const status = this.getStatus();
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify(status));
       return;
     }
 
+    // Session routes
+    if (path.startsWith("/sessions")) {
+      handleSessionRoutes(req, res, url, this.sessionManager);
+      return;
+    }
+
+    // 404 for everything else
     res.writeHead(404, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ error: "Not found" }));
   }
