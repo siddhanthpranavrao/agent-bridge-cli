@@ -131,6 +131,28 @@ Terminal 2:
   (backend excluded itself automatically)
 ```
 
+### Example: Per-session targeted questions
+
+Each session gets a different question tailored to its expertise:
+
+```
+Terminal 1: claude (in /projects/acme-web)
+  → /bridge connect acme --name frontend
+
+Terminal 2: claude (in /projects/acme-api)
+  → /bridge connect acme --name backend
+
+Terminal 3: claude (in /projects/acme-db)
+  → /bridge connect acme --name database
+
+Terminal 1:
+  → /bridge ask backend:"What does the /users endpoint expect?" database:"What's the users table schema?"
+  ✓ From backend: "POST /users expects { email: string, password: string }..."
+  ✓ From database: "users table: id (uuid), email (unique), password_hash, created_at..."
+```
+
+Sessions that can answer from their summary do so instantly. Only sessions whose summaries can't answer are forked — and if a session has multiple unanswered questions, they're batched into a single fork to minimize cost.
+
 ## How it works
 
 A lightweight local broker runs on your machine. Claude Code sessions register with it. When one session needs information from another, the broker either answers from a cached knowledge summary (cheap) or forks the target session to get the answer (more expensive, but only when needed). Summaries get smarter over time as forks fill in knowledge gaps.
@@ -212,9 +234,15 @@ Ask one or more sessions a question.
 /bridge ask "How does authentication work?"    # auto-routes to best session
 ```
 
+**Per-session questions:** Ask different questions to different sessions in one command:
+```
+/bridge ask backend:"What's the API endpoint?" database:"What's the schema?" lambda:"How does it process?"
+```
+Or use natural language: "ask backend about the endpoint and database about the schema". The same question can target multiple sessions (`backend,api:"How does auth work?"`), and a session appearing in multiple groups is forked only once with all its questions batched.
+
 **Single target:** Specify which session to query. Supports exact name, session ID, or fuzzy matching (`bakend` finds `backend`).
 
-**Multi-target:** Comma-separated or "and"-separated targets. Each target is fuzzy-matched independently. Duplicates are automatically deduplicated. Your own session is excluded.
+**Multi-target:** Comma-separated or "and"-separated targets with a shared question. Each target is fuzzy-matched independently. Duplicates are automatically deduplicated. Your own session is excluded.
 
 **Broadcast (`--all`):** Queries every session in the group except yourself. Useful for cross-cutting questions that span multiple codebases.
 
@@ -338,6 +366,7 @@ All values have sensible defaults and are configurable:
 | `maxSummaryAgeMs` | 24 hours | Staleness threshold — summaries older than this are regenerated |
 | `maxFanOut` | 5 | Max sessions per multi-target or broadcast query |
 | `maxConcurrentForks` | 5 | Max simultaneous fork operations |
+| `maxQueries` | 5 | Max query groups per queries-mode request |
 
 ### Data storage
 
@@ -391,7 +420,7 @@ tests/                    # Mirrors src/ structure
 bun test
 ```
 
-278 tests across 11 files covering:
+301 tests across 11 files covering:
 
 - Broker lifecycle (start, stop, health, idle timeout, crash recovery)
 - Session management (registration, groups, fuzzy resolution, name sanitization)
@@ -401,6 +430,7 @@ bun test
 - Multi-target fan-out (resolution, dedup, fuzzy matching per target, error isolation, 207 Multi-Status)
 - Broadcast mode (self-exclusion, empty group, maxFanOut enforcement)
 - Two-phase execution (summary-only answers, fork gaps only, background enrichment)
+- Queries mode (per-session questions, fork batching, per-question enrichment, schema validation)
 - CLI parsing (subcommand validation, typo correction)
 - Storage (path scoping, traversal protection, deleteAll)
 

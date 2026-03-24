@@ -123,8 +123,9 @@ Always read the port fresh before asking.
 
 **Step 0: Determine mode from the user's input.**
 
+- Different questions for different sessions (e.g., `backend:"Q1" database:"Q2"` or natural language like "ask backend about X and database about Y") → **queries mode**
 - `--all` flag → **broadcast mode** (ask all sessions in the group)
-- Multiple targets separated by commas or "and" → **multi-target mode**
+- Multiple targets separated by commas or "and" with a single shared question → **multi-target mode**
 - Single target name → **single-target mode**
 - No target at all → **auto-route mode**
 
@@ -135,17 +136,20 @@ Always read the port fresh before asking.
 - `/bridge ask backend and database "question"` → multi-target: `["backend", "database"]`
 - `/bridge ask --all "question"` → broadcast
 - `/bridge ask "question"` → auto-route
+- `/bridge ask backend:"What's the API?" database:"What's the schema?"` → queries mode
+- `/bridge ask backend,api:"How does auth work?" database:"What's the schema?"` → queries mode (shared question for backend+api, different for database)
+- "ask backend about the endpoint and database about the schema" → queries mode (natural language)
 
-**Step 1: Parse and validate targets (multi-target mode only).**
+**Step 1: Parse and validate targets.**
 
-Split the target string on commas or " and " (case-insensitive). Trim whitespace and filter out empty entries.
+For **multi-target mode**: Split on commas or " and ", trim whitespace, filter empties. If only ONE target after parsing → single-target mode.
+
+For **queries mode**: Parse each `target(s):"question"` pair. Multiple targets for the same question can be comma-separated before the colon. Also handle natural language — interpret the user's intent and construct the pairs.
 
 Validate each target name: must contain only letters, numbers, and hyphens. If any name has invalid characters after cleanup, show usage help and DO NOT call the API:
 
 > Invalid target name "\<name\>". Target names can only contain letters, numbers, and hyphens.
-> Usage: `/bridge ask backend,database "question"`
-
-If only ONE target remains after parsing, treat it as **single-target mode** (use `targetSession`, not `targets` array).
+> Usage: `/bridge ask backend:"question" database:"question"`
 
 **Step 2: Send the request.**
 
@@ -174,6 +178,13 @@ curl -s -X POST http://127.0.0.1:$BRIDGE_PORT/ask \
   -d '{"broadcast":true,"question":"<question>","group":"<group>","sourceSession":"<your-session-id>"}'
 ```
 
+*Queries (per-session questions):*
+```bash
+curl -s -X POST http://127.0.0.1:$BRIDGE_PORT/ask \
+  -H 'Content-Type: application/json' \
+  -d '{"queries":[{"question":"<q1>","targets":["<target1>"]},{"question":"<q2>","targets":["<target2>","<target3>"]}],"group":"<group>","sourceSession":"<your-session-id>"}'
+```
+
 *Auto-route (no target):*
 ```bash
 curl -s -X POST http://127.0.0.1:$BRIDGE_PORT/ask \
@@ -181,7 +192,9 @@ curl -s -X POST http://127.0.0.1:$BRIDGE_PORT/ask \
   -d '{"question":"<question>","group":"<group>"}'
 ```
 
-For multi-target and broadcast, include `sourceSession` set to this session's bridge session ID (the SESSION_ID from connect) so the broker can exclude this session from the query.
+For queries mode, the `question` field is NOT needed — each query group has its own question. Max 5 query groups per request.
+
+For multi-target, broadcast, and queries, include `sourceSession` set to this session's bridge session ID (the SESSION_ID from connect) so the broker can exclude this session from the query.
 
 **Step 3: Present the response.**
 
@@ -189,7 +202,7 @@ For multi-target and broadcast, include `sourceSession` set to this session's br
 - Present the answer with attribution: "From \<source\>: \<answer\>"
 - Note if it came from a fork (fresh query) vs summary (cached knowledge)
 
-*Multi-target / broadcast response:* `{ answers: [{ answer, source, fromFork }], warnings: [] }`
+*Multi-target / broadcast / queries response:* `{ answers: [{ answer, source, fromFork }], warnings: [] }`
 - Present each answer with its source session name
 - Note whether each came from summary (fast) or fork (fresh query)
 - If `warnings` array is non-empty, mention the issues (e.g., "Session 'xyzzy' could not be found")
