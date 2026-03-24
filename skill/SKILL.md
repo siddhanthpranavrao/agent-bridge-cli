@@ -21,7 +21,7 @@ Parse the first word as the subcommand. The rest are arguments for that subcomma
 
 - `connect [group] [--name <name>]` — Connect this session to the bridge broker
 - `disconnect` — Disconnect this session from the broker
-- `ask [target] "question"` — Ask another session a question (target is optional — omit to auto-route)
+- `ask [target(s)] "question"` — Ask one or more sessions. Supports: single target, comma-separated targets, `--all` for broadcast, or omit for auto-route
 - `sessions` — List connected sessions in your group
 - `status` — Show broker health and detailed info
 - `shutdown` — Stop the broker
@@ -117,27 +117,89 @@ curl -s -X POST http://127.0.0.1:$BRIDGE_PORT/sessions/deregister \
   -d '{"sessionId":"<your-session-id>"}'
 ```
 
-### ask [target] "question"
+### ask [target(s)] "question"
 
-Always read the port fresh before asking:
+Always read the port fresh before asking.
 
-If target is provided:
+**Step 0: Determine mode from the user's input.**
+
+- `--all` flag → **broadcast mode** (ask all sessions in the group)
+- Multiple targets separated by commas or "and" → **multi-target mode**
+- Single target name → **single-target mode**
+- No target at all → **auto-route mode**
+
+**Parsing examples:**
+- `/bridge ask backend "question"` → single target: `backend`
+- `/bridge ask backend,database "question"` → multi-target: `["backend", "database"]`
+- `/bridge ask backend, database "question"` → multi-target: `["backend", "database"]`
+- `/bridge ask backend and database "question"` → multi-target: `["backend", "database"]`
+- `/bridge ask --all "question"` → broadcast
+- `/bridge ask "question"` → auto-route
+
+**Step 1: Parse and validate targets (multi-target mode only).**
+
+Split the target string on commas or " and " (case-insensitive). Trim whitespace and filter out empty entries.
+
+Validate each target name: must contain only letters, numbers, and hyphens. If any name has invalid characters after cleanup, show usage help and DO NOT call the API:
+
+> Invalid target name "\<name\>". Target names can only contain letters, numbers, and hyphens.
+> Usage: `/bridge ask backend,database "question"`
+
+If only ONE target remains after parsing, treat it as **single-target mode** (use `targetSession`, not `targets` array).
+
+**Step 2: Send the request.**
+
 ```bash
 BRIDGE_PORT=$(cat ~/.agent-bridge/broker.port)
+```
+
+*Single target:*
+```bash
 curl -s -X POST http://127.0.0.1:$BRIDGE_PORT/ask \
   -H 'Content-Type: application/json' \
   -d '{"targetSession":"<target>","question":"<question>","group":"<group>"}'
 ```
 
-If no target (auto-route):
+*Multiple targets:*
 ```bash
-BRIDGE_PORT=$(cat ~/.agent-bridge/broker.port)
+curl -s -X POST http://127.0.0.1:$BRIDGE_PORT/ask \
+  -H 'Content-Type: application/json' \
+  -d '{"targets":["<target1>","<target2>"],"question":"<question>","group":"<group>","sourceSession":"<your-session-id>"}'
+```
+
+*Broadcast (--all):*
+```bash
+curl -s -X POST http://127.0.0.1:$BRIDGE_PORT/ask \
+  -H 'Content-Type: application/json' \
+  -d '{"broadcast":true,"question":"<question>","group":"<group>","sourceSession":"<your-session-id>"}'
+```
+
+*Auto-route (no target):*
+```bash
 curl -s -X POST http://127.0.0.1:$BRIDGE_PORT/ask \
   -H 'Content-Type: application/json' \
   -d '{"question":"<question>","group":"<group>"}'
 ```
 
-Present the answer to the user. The response includes `answer`, `source`, and `fromFork` (whether it was answered from summary or required a fork).
+For multi-target and broadcast, include `sourceSession` set to this session's bridge session ID (the SESSION_ID from connect) so the broker can exclude this session from the query.
+
+**Step 3: Present the response.**
+
+*Single target / auto-route response:* `{ answer, source, fromFork }`
+- Present the answer with attribution: "From \<source\>: \<answer\>"
+- Note if it came from a fork (fresh query) vs summary (cached knowledge)
+
+*Multi-target / broadcast response:* `{ answers: [{ answer, source, fromFork }], warnings: [] }`
+- Present each answer with its source session name
+- Note whether each came from summary (fast) or fork (fresh query)
+- If `warnings` array is non-empty, mention the issues (e.g., "Session 'xyzzy' could not be found")
+- HTTP 200 = all sessions answered, HTTP 207 = some sessions had issues, HTTP 404 = no sessions could answer
+- Synthesize the answers naturally if the user's question spans multiple sessions
+
+*Error responses:*
+- HTTP 400 with "max fan-out" → too many targets, ask the user to reduce
+- HTTP 400 with "Validation failed" → invalid request (e.g., mixed targeting modes)
+- HTTP 404 → no sessions found or none could answer
 
 ### sessions
 
