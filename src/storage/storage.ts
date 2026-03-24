@@ -1,4 +1,4 @@
-import { readFile, writeFile, unlink, mkdir, access } from "node:fs/promises";
+import { readFile, writeFile, unlink, mkdir, access, readdir } from "node:fs/promises";
 import { resolve, normalize } from "node:path";
 import {
   DEFAULT_BASE_DIR,
@@ -84,6 +84,18 @@ export class Storage {
   async ensureDir(relativePath: string): Promise<void> {
     const fullPath = this.ensureScoped(relativePath);
     await mkdir(fullPath, { recursive: true });
+  }
+
+  async listDir(relativePath: string): Promise<string[]> {
+    const fullPath = this.ensureScoped(relativePath);
+    try {
+      return await readdir(fullPath);
+    } catch (err: unknown) {
+      if (err instanceof Error && "code" in err && err.code === "ENOENT") {
+        return [];
+      }
+      throw err;
+    }
   }
 
   async initDirectories(): Promise<void> {

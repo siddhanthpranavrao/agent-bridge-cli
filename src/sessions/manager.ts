@@ -21,6 +21,7 @@ export class SessionManager {
   private readonly storage: Storage;
   private readonly sessions: Map<string, Session> = new Map();
   private readonly groupIndex: Map<string, Set<string>> = new Map();
+  private readonly onRegisterCallbacks: ((sessionId: string) => void)[] = [];
   private readonly onDeregisterCallbacks: ((sessionId: string) => void)[] = [];
 
   constructor(storage: Storage) {
@@ -56,6 +57,10 @@ export class SessionManager {
     this.groupIndex.get(group)!.add(session.sessionId);
 
     await this.persistGroup(group);
+
+    for (const cb of this.onRegisterCallbacks) {
+      try { cb(session.sessionId); } catch {}
+    }
 
     return session;
   }
@@ -162,8 +167,45 @@ export class SessionManager {
     return removed;
   }
 
+  onRegister(callback: (sessionId: string) => void): void {
+    this.onRegisterCallbacks.push(callback);
+  }
+
   onDeregister(callback: (sessionId: string) => void): void {
     this.onDeregisterCallbacks.push(callback);
+  }
+
+  /**
+   * Reload sessions from persisted group files on disk.
+   * Used for crash recovery — restores in-memory state from persistent storage.
+   */
+  async loadFromDisk(): Promise<number> {
+    const { z } = await import("zod");
+    let loaded = 0;
+
+    const groupDirs = await this.storage.listDir(GROUPS_DIR);
+    for (const groupDir of groupDirs) {
+      const content = await this.storage.read(`${GROUPS_DIR}/${groupDir}/${SESSIONS_FILE}`);
+      if (!content) continue;
+
+      try {
+        const sessions = z.array(SessionSchema).parse(JSON.parse(content));
+        for (const session of sessions) {
+          if (this.sessions.has(session.sessionId)) continue;
+          this.sessions.set(session.sessionId, session);
+
+          if (!this.groupIndex.has(session.group)) {
+            this.groupIndex.set(session.group, new Set());
+          }
+          this.groupIndex.get(session.group)!.add(session.sessionId);
+          loaded++;
+        }
+      } catch {
+        // Skip corrupted files
+      }
+    }
+
+    return loaded;
   }
 
   getSessionCount(): number {

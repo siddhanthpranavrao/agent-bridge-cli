@@ -27,6 +27,8 @@ export class BrokerServer {
   private startedAt: number = 0;
   private assignedPort: number = 0;
   private stopping: boolean = false;
+  private idleTimeoutHandle: ReturnType<typeof setTimeout> | null = null;
+  private shutdownCallback: (() => void) | null = null;
 
   constructor(storage: Storage, config?: Partial<BrokerConfig>, deps?: BrokerDeps) {
     this.storage = storage;
@@ -44,6 +46,19 @@ export class BrokerServer {
     this.sessionManager.onDeregister((sessionId) => {
       this.summaryEngine.delete(sessionId).catch(() => {});
     });
+
+    // Wire up reference counting
+    this.sessionManager.onDeregister(() => this.checkSessionCount());
+    this.sessionManager.onRegister(() => this.cancelIdleTimeout());
+  }
+
+  /**
+   * Register a callback to be called when auto-shutdown is triggered
+   * (idle timeout with no sessions). The broker does not call process.exit()
+   * itself — the caller controls the exit.
+   */
+  onAutoShutdown(callback: () => void): void {
+    this.shutdownCallback = callback;
   }
 
   async start(): Promise<void> {
@@ -78,6 +93,7 @@ export class BrokerServer {
     }
 
     this.stopping = true;
+    this.cancelIdleTimeout();
 
     await new Promise<void>((resolve, reject) => {
       this.server!.close((err) => {
@@ -119,6 +135,28 @@ export class BrokerServer {
     return this.summaryEngine;
   }
 
+  private checkSessionCount(): void {
+    if (this.sessionManager.getSessionCount() === 0) {
+      this.startIdleTimeout();
+    }
+  }
+
+  private startIdleTimeout(): void {
+    this.cancelIdleTimeout();
+    this.idleTimeoutHandle = setTimeout(() => {
+      if (this.sessionManager.getSessionCount() === 0) {
+        this.shutdownCallback?.();
+      }
+    }, this.config.idleTimeoutMs);
+  }
+
+  private cancelIdleTimeout(): void {
+    if (this.idleTimeoutHandle) {
+      clearTimeout(this.idleTimeoutHandle);
+      this.idleTimeoutHandle = null;
+    }
+  }
+
   private handleRequest(req: IncomingMessage, res: ServerResponse): void {
     const url = new URL(req.url ?? "/", `http://${req.headers.host}`);
     const path = url.pathname;
@@ -128,6 +166,19 @@ export class BrokerServer {
       const status = this.getStatus();
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify(status));
+      return;
+    }
+
+    // Shutdown endpoint
+    if (path === "/shutdown") {
+      if (req.method !== "POST") {
+        res.writeHead(405, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Method not allowed" }));
+        return;
+      }
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ message: "Broker shutting down" }));
+      setTimeout(() => this.shutdownCallback?.(), 100);
       return;
     }
 

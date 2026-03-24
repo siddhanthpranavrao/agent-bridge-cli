@@ -181,3 +181,98 @@ describe("BrokerServer - custom configuration", () => {
     expect(status.port).toBe(0);
   });
 });
+
+describe("BrokerServer - idle timeout and auto-shutdown", () => {
+  test("triggers auto-shutdown callback after idle timeout with no sessions", async () => {
+    let shutdownCalled = false;
+    const shortBroker = new BrokerServer(storage, { idleTimeoutMs: 100 });
+    shortBroker.onAutoShutdown(() => { shutdownCalled = true; });
+    await shortBroker.start();
+    const port = shortBroker.getPort();
+
+    // Register and deregister a session to trigger ref counting
+    await fetch(`http://127.0.0.1:${port}/sessions/register`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: "s1", claudeSessionId: "uuid-1",
+        pid: process.pid, workingDirectory: "/projects/test",
+      }),
+    });
+    await fetch(`http://127.0.0.1:${port}/sessions/deregister`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sessionId: "s1" }),
+    });
+
+    // Wait for idle timeout
+    await new Promise((r) => setTimeout(r, 200));
+    expect(shutdownCalled).toBe(true);
+
+    await shortBroker.stop();
+  });
+
+  test("cancels idle timeout when new session registers", async () => {
+    let shutdownCalled = false;
+    const shortBroker = new BrokerServer(storage, { idleTimeoutMs: 150 });
+    shortBroker.onAutoShutdown(() => { shutdownCalled = true; });
+    await shortBroker.start();
+    const port = shortBroker.getPort();
+
+    // Register and deregister to start idle timer
+    await fetch(`http://127.0.0.1:${port}/sessions/register`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: "s1", claudeSessionId: "uuid-1",
+        pid: process.pid, workingDirectory: "/projects/test",
+      }),
+    });
+    await fetch(`http://127.0.0.1:${port}/sessions/deregister`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sessionId: "s1" }),
+    });
+
+    // Register new session before timeout fires
+    await new Promise((r) => setTimeout(r, 50));
+    await fetch(`http://127.0.0.1:${port}/sessions/register`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: "s2", claudeSessionId: "uuid-2",
+        pid: process.pid, workingDirectory: "/projects/other",
+      }),
+    });
+
+    // Wait past what would have been the timeout
+    await new Promise((r) => setTimeout(r, 200));
+    expect(shutdownCalled).toBe(false); // should NOT have shut down
+
+    await shortBroker.stop();
+  });
+});
+
+describe("BrokerServer - manual shutdown endpoint", () => {
+  test("POST /shutdown returns 200 and triggers callback", async () => {
+    let shutdownCalled = false;
+    await broker.start();
+    broker.onAutoShutdown(() => { shutdownCalled = true; });
+    const port = broker.getPort();
+
+    const res = await fetch(`http://127.0.0.1:${port}/shutdown`, { method: "POST" });
+    expect(res.status).toBe(200);
+    const body = await res.json() as any;
+    expect(body.message).toContain("shutting down");
+
+    await new Promise((r) => setTimeout(r, 200));
+    expect(shutdownCalled).toBe(true);
+  });
+
+  test("GET /shutdown returns 405", async () => {
+    await broker.start();
+    const port = broker.getPort();
+    const res = await fetch(`http://127.0.0.1:${port}/shutdown`);
+    expect(res.status).toBe(405);
+  });
+});
