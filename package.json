@@ -1,0 +1,30 @@
+{
+  "name": "agent-bridge",
+  "version": "0.1.0",
+  "description": "Let multiple Claude Code instances communicate without polluting each other's context",
+  "module": "src/index.ts",
+  "type": "module",
+  "bin": {
+    "agent-bridge": "./dist/index.js"
+  },
+  "scripts": {
+    "dev": "bun run src/index.ts",
+    "build": "bun build --target=node ./src/index.ts --outfile=dist/index.js",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5"
+  },
+  "files": [
+    "dist/**/*.js"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/siddhanthpranavrao/agent-bridge-cli.git"
+  }
+}

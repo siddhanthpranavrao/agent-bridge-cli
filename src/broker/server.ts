@@ -1,0 +1,90 @@
+import { createServer, type Server, type IncomingMessage, type ServerResponse } from "node:http";
+import { BROKER_PID_FILE, BROKER_PORT_FILE } from "../constants.ts";
+import type { Storage } from "../storage/storage.ts";
+import { DEFAULT_BROKER_CONFIG, type BrokerConfig, type BrokerStatus } from "./types.ts";
+
+export class BrokerServer {
+  private readonly storage: Storage;
+  private readonly config: BrokerConfig;
+  private server: Server | null = null;
+  private startedAt: number = 0;
+  private assignedPort: number = 0;
+  private stopping: boolean = false;
+
+  constructor(storage: Storage, config?: Partial<BrokerConfig>) {
+    this.storage = storage;
+    this.config = { ...DEFAULT_BROKER_CONFIG, ...config };
+  }
+
+  async start(): Promise<void> {
+    if (this.server) {
+      throw new Error("Broker is already running");
+    }
+
+    await this.storage.initDirectories();
+
+    this.server = createServer((req, res) => this.handleRequest(req, res));
+    this.startedAt = Date.now();
+    this.stopping = false;
+
+    await new Promise<void>((resolve, reject) => {
+      this.server!.listen(this.config.port, this.config.host, () => {
+        const addr = this.server!.address();
+        if (addr && typeof addr === "object") {
+          this.assignedPort = addr.port;
+        }
+        resolve();
+      });
+      this.server!.on("error", reject);
+    });
+
+    await this.storage.write(BROKER_PID_FILE, String(process.pid));
+    await this.storage.write(BROKER_PORT_FILE, String(this.assignedPort));
+  }
+
+  async stop(): Promise<void> {
+    if (!this.server) {
+      return;
+    }
+
+    this.stopping = true;
+
+    await new Promise<void>((resolve, reject) => {
+      this.server!.close((err) => {
+        if (err) reject(err);
+        else resolve();
+      });
+    });
+
+    this.server = null;
+
+    await this.storage.delete(BROKER_PID_FILE);
+    await this.storage.delete(BROKER_PORT_FILE);
+  }
+
+  getStatus(): BrokerStatus {
+    return {
+      pid: process.pid,
+      port: this.assignedPort,
+      host: this.config.host,
+      uptime: this.startedAt > 0 ? Math.floor((Date.now() - this.startedAt) / 1000) : 0,
+      status: this.stopping ? "stopping" : "ok",
+    };
+  }
+
+  getPort(): number {
+    return this.assignedPort;
+  }
+
+  private handleRequest(req: IncomingMessage, res: ServerResponse): void {
+    if (req.method === "GET" && req.url === "/health") {
+      const status = this.getStatus();
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify(status));
+      return;
+    }
+
+    res.writeHead(404, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "Not found" }));
+  }
+}
